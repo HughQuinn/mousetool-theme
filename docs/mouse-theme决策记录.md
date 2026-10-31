@@ -60,6 +60,7 @@
 | 49 | 前端纯逻辑单测 | `node --test` 直接跑 `.ts`（类型剥离），不引测试框架；CI 增补 `npm test`（六道闸）；纯函数抽到零依赖模块（semver / schedule-window / preview-cache） |
 | 50 | 服务层与 mock 分离 | mock 全部住进 `services/mock.ts`（数据）+ `mock-theme.ts` / `mock-settings.ts`（命令级实现）；服务文件只留类型契约、真实 invoke 与一行委派；不改任何行为 |
 | 51 | 光标大小：真机验证否决 | 修复规划 G9 的前置验证：`CursorBaseSize` 与 `Accessibility\CursorSize` 写入 + `SPI_SETCURSORS` 均不缩放活动光标（位图实测 32×32 恒定）——按假设立项不可行；维持决策 11 的「直达门」，不开发进应用 |
+| 52 | 文件名大小写 | git 索引与磁盘统一为**大写 `AGENTS.md`**（反转决策 44 的小写口径）；README / 两份指南 / 开发手册四处链接与 `doc_ref_check` 三处引用同步改写 |
 
 ---
 
@@ -1109,6 +1110,16 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **附带产出**：验证脚本本身入库（含「假设未证实 → 退出码 1」的语义），证据快照在 `%TEMP%\cs-cursor-size-evidence.json` 与备份 `cs-cursor-size-backup.reg`（不入库）。
 
 **为什么记一条决策**：修复规划与决策 43 都说「光标大小排在后面」，给人「技术上可行、只是没排期」的印象；真机证伪后它不再是排期问题，而是**路线问题**。把证据钉进决策记录，防止将来有人（包括 AI 助手）按旧认识重新立项。
+
+---
+
+## 决策 52：文件名大小写——`agents.md` 索引名统一为大写 `AGENTS.md`
+
+**结论**（2026-11-01，用户拍板）：git 索引与磁盘统一为**大写 `AGENTS.md`**，反转决策 44 定下的小写口径。
+
+- **背景**：决策 44 以 git 索引为准把文档链接统一成小写 `agents.md`，但 Windows 磁盘上的文件实体长期显示为 `AGENTS.md`（NTFS 保留大小写 + `core.ignorecase=true`，git status 不报差异）。按磁盘名传 pathspec 的提交工具会报 `pathspec 'AGENTS.md' did not match any file(s) known to git`，两套大小写并存持续制造摩擦。
+- **落点**：`git mv` 两步改名，索引与磁盘均为 `AGENTS.md`，内容零变更；README、发布指南、启动与构建指南、开发手册四处链接与 `doc_ref_check.mjs` 三处文件引用同步改为 `AGENTS.md`。Linux CI 与 GitHub 页面从此不依赖大小写不敏感的文件系统。
+- **为什么记一条决策**：决策 44 明确写过「git 里的文件名是小写 agents.md」；不补记的话，读者（包括 AI 助手）会按旧口径把链接改回小写，Linux 上的 `doc_ref_check` 链接检查会当场报错。
 
 ---
 
