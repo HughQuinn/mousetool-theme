@@ -34,7 +34,7 @@
 
 ### Trash（`utils/trash.rs`）
 
-删除即软删除，整目录移入数据根 `trash\<条目 UUID>\` 并写 `.trash.json` 快照（决策 26）。**条目 ID 与主题 ID 分开**：同一主题可删多次、删完恢复再删也不撞目录；恢复前复核快照 / `theme.json` / 目标目录；上限 20 套或 512 MB，超限按删除时间自动清最早；跨盘 `rename` 失败走复制 + 文件数与字节数校验 + 删源。`trash\` 不参与主题列表、备份与目录迁移。
+删除即软删除，整目录移入数据根 `trash\<条目 UUID>\` 并写 `.trash.json` 快照（决策 26）。**条目 ID 与主题 ID 分开**：同一主题可删多次、删完恢复再删也不撞目录；恢复前复核快照 / `theme.json` / 目标目录；上限 20 套或 512 MB，超限按删除时间自动清最早；跨盘 `rename` 失败走复制 + 文件数与字节数校验 + 删源。恢复遇同 ID 被占可改「存为副本」（决策 54）：分配**新 UUID** 复制落盘（不走搬移，失败删半成品、条目原样保留），`theme.json` 的 id 与目录名同步改写、名称加「（副本）」（40 字截断）；副本不自动应用、不记使用事件。`trash\` 不参与主题列表、备份与目录迁移。
 
 ### Capture（`utils/capture.rs`）
 
@@ -51,7 +51,7 @@
 
 ### 行为设置（`utils/settings.rs` / `tray.rs` / `autostart.rs`）
 
-- `settings.json` 存关闭行为/主题目录/开关/自动切换映射/光标守护/自动备份开关与保留份数/定时切换时段与映射（Rust 与前端共用）。
+- `settings.json` 存关闭行为/主题目录/开关/自动切换映射/光标守护/自动备份开关与保留份数/定时切换时段与映射/定时轮换开关与间隔（Rust 与前端共用）。
 - 关闭到托盘时托盘图标动态创建移除，托盘菜单带最近使用主题快速切换（≤8 + 还原默认勾选，决策 30）：应用 / 还原走 `commands/theme.rs` 的 `apply` / `restore` 同链路，`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单，不轮询；过期条目靠 `apply_by_id` 点击时复核自愈。
 - 自启动写 `HKCU\...\Run`。
 - 外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。
@@ -59,6 +59,7 @@
 - **光标守护也在前端** `lib/cursor-guard.ts`（决策 29）：启动检查 + 运行期 `active_external` 一轮恢复，复用 `applyTheme`，不轮询、不新增命令。
 - **自动备份也在前端** `lib/auto-backup.ts`（决策 32）：启动就绪后 / 窗口聚焦节流后 / 开关打开时触发 `run_auto_backup`，当日去重与过期清理在命令层。
 - **定时切换主题也在前端** `lib/schedule-switch.ts`（决策 33）：时间段内 / 外配对主题，边界用 `setTimeout` 到点评估，不轮询；时间段内且期间主题已设时深浅色切换让位。
+- **定时轮换也在前端** `lib/theme-rotate.ts`（决策 55，纯函数拆 `theme-rotate-core.ts`）：间隔 `setTimeout` 链到点应用「当前主题的下一套」（候选 =「我的主题」按名称序）；**优先级最低**——定时切换或跟随系统任一开启时让位，还原默认后挂起到下一周期；间隔 15–1440 由 `update_settings` 校验。
 
 ### 系统集成（`utils/integration.rs`）
 
@@ -96,10 +97,10 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 （与 `AGENTS.md`「三个内容视图 + 设置」对应；速查卡只留结构规则，这里是全部细则。）
 
 - **任务层弹窗与子页**（决策 23/26/34）：诊断、批量导入与备份内容都是任务层弹窗；备份历史与回收站是「数据」子页。不进 `PAGE_META` / `VIEWS`，不加导航、不加设置分组（备份内容从备份历史的行内「查看内容」打开）。单文件导入（侧栏按钮 / Ctrl+O / 拖 1 个）保持原链路不动；拖 2–20 个进 `importStore` 队列，串行执行、失败可单独重试。外部改写态下「保存并应用」只出现在侧栏当前使用卡，也不新开页面（决策 28）。
-- **设置五分组**（决策 14）：通用 = 应用主题三态（从侧栏迁入）/ 跟随系统切换主题（浅/深配对，决策 25）/ 定时切换主题（时间段内/外配对，默认关闭，决策 33）/ 光标守护（启动或系统改写后自动恢复上次主题，默认关闭，决策 29）/ 开机自启动 / 关闭行为（直接退出·最小化到托盘）/ 主题存储目录 / 自动检查更新；快捷键 = 应用内快捷键一览 + 开关；数据 = 数据目录 + 存储占用（决策 35）+ 数据备份（导出/合并恢复）+ 自动备份（每天一份进备份历史，默认关闭，决策 32）+ 备份历史（含内容浏览与单主题恢复，决策 34）+ 回收站（恢复 / 彻底删除 / 清空，决策 26）+ 清空使用记录（决策 35）+ 诊断信息；系统集成 = 鼠标属性面板直达 + 右键菜单开关（试点）；关于 = 版本 / 开源地址 / 检查更新（GitHub Releases）。进设置后侧栏整体切成「返回 + 分组」，页头跟随分组标题。
+- **设置五分组**（决策 14）：通用 = 应用主题三态（从侧栏迁入）/ 跟随系统切换主题（浅/深配对，决策 25）/ 定时切换主题（时间段内/外配对，默认关闭，决策 33）/ 定时轮换主题（间隔轮换「我的主题」，默认关闭，决策 55）/ 光标守护（启动或系统改写后自动恢复上次主题，默认关闭，决策 29）/ 开机自启动 / 关闭行为（直接退出·最小化到托盘）/ 主题存储目录 / 自动检查更新；快捷键 = 应用内快捷键一览 + 开关；数据 = 数据目录 + 存储占用（决策 35）+ 数据备份（导出/合并恢复）+ 自动备份（每天一份进备份历史，默认关闭，决策 32）+ 备份历史（含内容浏览与单主题恢复，决策 34）+ 回收站（恢复 / 恢复为副本 / 彻底删除 / 清空，决策 26/54）+ 清空使用记录（决策 35）+ 诊断信息；系统集成 = 鼠标属性面板直达 + 右键菜单开关（试点）；关于 = 版本 / 开源地址 / 检查更新（GitHub Releases）。进设置后侧栏整体切成「返回 + 分组」，页头跟随分组标题。
 - 改名只做在 `ThemeNameField` 一处（检查器头部）；表格行内的操作只有导出与删除。槽位统计口径在 `lib/slots.ts`（`SYSTEM_SLOT_TOTAL = 15` 是 `SLOT_DEFS` 的镜像，后端改槽位必须同步改它）。
 - **文件缺口**（声明了的槽位文件读不到，决策 31）只在三处提示：「我的主题」槽位列「缺 N 个文件」、检查器头部警示条（点名槽位中文名 + 「应用后写成空」的后果）、诊断中心第五项「文件完整性」；图库卡与最近使用不背管理信息。缺口**只展示不拦截**——应用 / 导出等命令行为不变，别给它加确认弹窗或自动修复。
-- 「我的主题」工具条排序与筛选——最新/最早/名称/槽位完整度 × 缺文件的/从未使用的，会话内不落盘（决策 48）。
+- 「我的主题」工具条排序与筛选——最新/最早/名称/槽位完整度/应用次数 × 缺文件的/从未使用的，会话内不落盘（决策 48/53）。并列排序口径：槽位 / 次数同数按导入时间**新在前**（决策 48 原文，`byDateNewestFirst`）。
 
 ---
 
@@ -118,7 +119,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `import_theme` 收 `sourcePath`（**zip、.themepack、.theme 光标方案或整个主题文件夹**，决策 16/36/39，后端权威校验），返回 `{ theme, warnings, duplicate_of }`——与库里已有主题内容完全相同时 `duplicate_of` 点名 + warnings 追加人话版（决策 47，**只提示不拦截**，复用决策 38 指纹 + 逐字节确认，在 ops 锁内比对）——目录里的链接 / 目录联接会被跳过并说明原因；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`），`.inf` 与光标文件共用 `ScanBudget`；`.themepack`（CAB）解档走 `THEME_LIMITS` 全套限额后与 zip 同链路（`cab` crate，LZX/Quantum 压缩不支持，决策 39）；`.theme` 是说明书级映射且引用可指向包外系统光标（`theme_file.rs`），被映射认领的文件不再被推断重复使用；`.theme` 单文件收编 = 按槽位复制引用文件（源文件不动），引用缺失只跳槽位并 warning、全部落空才拒绝（决策 36）。
 - `get_active_state` 是聚焦用的轻量重查（决策 24）：只读注册表 + 主题清单比对，不读历史、不取 `ops` 锁；失败直接 `Err`，前端静默保留旧状态。`get_all_themes` 的 `ThemesResult` 相应多出 `current_slots_filled` / `active_external`（槽位非空但匹配不到任何主题 = 被系统设置改写）与 `file_gaps`（文件缺口清单，决策 31：托盘与聚焦重查不做这一步）。
 - 没有 `list_themes`（是 `get_all_themes`）；没有 `create_custom_theme`（未实现）。
-- `delete_theme` 是**软删除**（决策 26）：整目录移入 `trash\`，返回 `{ auto_purged, warning }`；回收站上限 20 套 / 512 MB，超出自动清最早。`restore_from_trash` 会复核快照 / `theme.json` / 目标目录（同 ID 已存在就拒绝），`delete_from_trash` / `empty_trash` 才真正删文件；损坏条目列出但不可恢复。`list_trash` 返回条目 + 限额，前端不硬编码。
+- `delete_theme` 是**软删除**（决策 26）：整目录移入 `trash\`，返回 `{ auto_purged, warning }`；回收站上限 20 套 / 512 MB，超出自动清最早。`restore_from_trash` 会复核快照 / `theme.json` / 目标目录（同 ID 已存在就拒绝；`asCopy = true` 改为恢复为副本，新 UUID + 名称加「（副本）」，决策 54），返回 `theme_id` 供前端选中新主题；`delete_from_trash` / `empty_trash` 才真正删文件；损坏条目列出但不可恢复。`list_trash` 返回条目 + 限额，前端不硬编码。
 - `delete_themes` 是**批量软删除**（决策 43）：收 `themeIds`，去重后逐套复用 `delete_theme` 的 ID 校验、系统方案 / 使用中拒绝与回收站链路，返回 `{ deleted, failed, auto_purged, warning }`；单套失败只进 `failed`，其余照常删除（不回滚成功项）；整批取一把 `ops` 锁、发 `delete-progress`、有成功项才刷新一次托盘。UI 只在「我的主题 → 批量整理」出现，使用中主题复选框禁用，换搜索词清空勾选；选择不落盘。
 - `save_current_theme` 无入参（决策 28）：只在当前光标被外部改写时有意义；把注册表当前非空槽位复制为我的主题，全部抄全才自动应用，**有槽位没抄全绝不自动应用**（否则会把那些非空槽位写成空）；当前已是已知主题时返回「无需再保存」。返回 `SaveCurrentOutcome`，前端用 `applied` 区分「已保存并应用」与「只保存」。
 - `export_backup` 的 `destPath` 可空：空 = 写入数据目录 backups 目录自动命名（进「备份历史」），传路径 = 导出到任意位置（不受历史管理）；返回含 `saved_path` / `bytes`。`list_backups` 只读 zip 中央目录列应用内备份（时间倒序、上限 200），`kind` 按文件名前缀判定 auto / manual（决策 32），`delete_backup` 只收文件名、拒绝越出备份目录。`verify_backup` 备份体检（决策 37）：流式读每个条目进 sink 触发 CRC，坏条目当场点名（≤20 条 + `corrupt_total`）；**只读不取锁、结果是快照**（列表只覆盖「打开就炸」，数据区静默损坏靠它）；体检入口在备份历史行内，诊断中心不做整库扫描（1GiB × N 会把诊断变成分钟级阻塞）。`run_auto_backup` 是自动备份的命令（决策 32）：收 `keep`，当日去重、按 keep 清理过期 auto 备份（手动备份不碰）、与手动备份共用 ops 锁且不发 `backup-progress`；前端 `lib/auto-backup.ts` 只管触发。
@@ -128,17 +129,19 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `export_all_themes` 批量导出「我的主题」（决策 35）：收 `destDir`（拒绝落进备份 / 回收站 / 主题库），部分成功——单套失败进 `failed` 其余照常落盘；落盘名后端兜底（非法字符 / 保留名 / 重名加序号不覆盖）；取 ops 锁并发 `export-all-progress`。
 - `find_duplicate_themes` 主题内容查重（决策 38）：槽位指纹（键 + 扩展名 + 字节）预分组 → 组内与首套逐字节确认，**只报证实的重复**；缺文件的主题不参与（`skipped_missing` 计数）；只读不取锁；UI 是诊断中心第六项，也是诊断中心**唯一的按需命令**（打开 / 重扫时跑一次、结果只是会话内快照）——其余五项仍全部从 store 派生，别顺手把更多命令塞进诊断。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
-- `update_settings` 是**补丁语义**（只传要改的字段）；关闭行为变更会同步托盘有无。`preview_themes_dir` 只校验与统计、不碰文件；`set_themes_dir` 返回 `{ settings, report }`，执行中通过 `themes-dir-progress` 事件报阶段，整体成功前不改设置；`import_backup` 是合并恢复，不覆盖已有。
+- `update_settings` 是**补丁语义**（只传要改的字段）；关闭行为变更会同步托盘有无；轮换间隔收 `rotateIntervalMinutes`（15–1440，越界中文报错，决策 55）。`preview_themes_dir` 只校验与统计、不碰文件；`set_themes_dir` 返回 `{ settings, report }`，执行中通过 `themes-dir-progress` 事件报阶段，整体成功前不改设置；`import_backup` 是合并恢复，不覆盖已有。
 - 除纯路径计算的 `get_data_dir` 外，所有命令都是 `async` + `spawn_blocking`；`import_theme` / `export_backup` / `import_backup` / `restore_theme_from_backup` / `run_auto_backup` / `set_themes_dir` / `export_all_themes` / 删除主题 / 批量删除 / 回收站恢复 / 彻底删除 / 清空 / 保存当前光标额外取 `ops::try_begin` 锁，并分别发 `import-progress` / `backup-progress` / `themes-dir-progress` / `export-all-progress` / `delete-progress`（自动备份与单主题恢复不发事件）。第二个重操作会立刻失败，不要改成排队；只读命令（`get_storage_stats` / `list_backups` / `verify_backup` 等）不取锁。
 
 ---
 
 ## 检查脚本逐条说明
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` 走交互链路。各脚本的验收内容：
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` 走交互链路。各脚本的验收内容：
 
 - `nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
-- `mine_view_check` 验收「我的主题」排序与筛选（决策 48）：默认顺序不变 → 注入一套最早/最小名/最少槽位的主题后三种排序各自生效 → 从未使用筛选命中 → 计数标注 → 整理模式下控件让位 → 缺口筛选空态与恢复 → `?mock-broken-files=1` 缺口筛选命中带提示行 → 无 JS 异常。
+- `mine_view_check` 验收「我的主题」排序与筛选（决策 48 + 决策 53）：默认顺序不变 → 应用次数列与事件流口径一致、没记录显示「—」→ 注入一套最早/最小名/最少槽位的主题后各排序（含按应用次数）各自生效 → 从未使用筛选命中 → 计数标注 → 整理模式下控件让位 → 缺口筛选空态与恢复 → `?mock-broken-files=1` 缺口筛选命中带提示行 → 无 JS 异常。
+- `trash_copy_check` 验收恢复为副本（决策 54）：无同 ID 冲突时不出现入口 → 删除主题进回收站仍无入口 → 注入同 ID 主题后行内出现「存为副本」并点击 → 副本以新 UUID 落库、名称带「（副本）」且被选中 → 无 JS 异常。
+- `rotate_check` 验收定时轮换（决策 55）：卡片出现（开关 + 间隔下拉 + 状态行）、缺省关闭时下拉禁用 → 开开关改间隔走 mock 设置 → 定时切换开启时状态行点名让位、强制触发不切 → dev 钩子强制触发一轮应用下一套「我的主题」、再触循环推进 → 无 JS 异常。
 - `future_check` 验收三个维护界面：诊断中心（设置 → 数据 → 运行诊断）、备份历史（mock 至少 2 行、往返切换）、导入中心（`__importStore.enqueue` 两条 → 串行成功 → 主题数 +2）。
 - `trash_check` 验收回收站：删除 → 条目出现 → 恢复回列表 → 彻底删除 → 清空 → 损坏条目禁用恢复（`?mock-trash-damaged`）。
 - `capture_check` 验收保存当前光标：`?mock-external=1` 外部改写态 → 保存并应用 → 收编为当前主题（普通态不出现入口）。

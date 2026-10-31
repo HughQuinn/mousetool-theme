@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Monitor, Moon, Sun } from "lucide-react";
 
@@ -11,6 +11,7 @@ import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
 import { autoSwitchTargetId } from "@/lib/auto-switch";
 import { resolveGuardTarget, restoreNow } from "@/lib/cursor-guard";
 import { isScheduleInWindow } from "@/lib/schedule-switch";
+import { ROTATE_INTERVAL_OPTIONS, rotationYields } from "@/lib/theme-rotate-core";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
@@ -91,6 +92,11 @@ export function GeneralSection() {
   const recent = useThemeStore((s) => s.recent);
   const themes = useThemeStore((s) => s.themes);
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  // 轮换候选数（决策 55）：不足两套时状态行要说明「没有可换的」
+  const mineCount = useMemo(
+    () => themes.filter((theme) => !theme.is_built_in).length,
+    [themes],
+  );
   const themesLoading = useThemeStore((s) => s.loading);
   const themesLoadError = useThemeStore((s) => s.loadError);
   const busy = useThemeStore((s) => s.busy);
@@ -299,6 +305,50 @@ export function GeneralSection() {
                 {isScheduleInWindow(settings)
                   ? "当前处于时间段内，使用「期间内主题」"
                   : "当前处于时间段外，使用「期间外主题」"}
+              </p>
+            </div>
+          )}
+        </SettingCard>
+
+        <SettingCard
+          title="定时轮换主题"
+          description="到设定间隔就应用「我的主题」里的下一套，循环推进（至少导入两套才有得换）。轮换是优先级最低的自动行为：跟随系统切换或定时切换开启时让位；手动「还原默认」后挂起，到下一个周期恢复"
+          action={
+            <Toggle
+              label="定时轮换主题"
+              checked={settings?.rotate_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ rotate_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          {settings && (
+            <div className="mt-3 grid gap-2">
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-muted-foreground">轮换间隔</span>
+                <select
+                  aria-label="轮换间隔"
+                  data-rotate-select
+                  className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  value={settings.rotate_interval_minutes}
+                  disabled={!settings.rotate_enabled}
+                  onChange={(event) =>
+                    void patchSettings({ rotate_interval_minutes: Number(event.target.value) })
+                  }
+                >
+                  {ROTATE_INTERVAL_OPTIONS.map((option) => (
+                    <option key={option.minutes} value={option.minutes}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p data-rotate-status className="text-2xs text-muted-foreground">
+                {rotationYields(settings)
+                  ? "已让位：跟随系统切换或定时切换开启期间，轮换暂停"
+                  : mineCount < 2
+                    ? "「我的主题」不足两套，暂无可轮换的候选"
+                    : "将在「我的主题」里按名称顺序循环应用"}
               </p>
             </div>
           )}

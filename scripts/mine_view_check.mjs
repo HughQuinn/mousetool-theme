@@ -1,7 +1,8 @@
-// 「我的主题」排序与筛选验收（决策 48，浏览器 mock 链路）
+// 「我的主题」排序与筛选验收（决策 48 + 决策 53 的应用次数，浏览器 mock 链路）
 // 前置：vite 已在 1420（与 dev_bg 同一条命令里跑）。
 // - 默认顺序 = 后端口径（最新导入在前），工具条出现排序 / 筛选两个下拉
-// - 排序：最早导入 / 名称 / 槽位完整度各自改变行序
+// - 应用次数列：mock 事件流里 Neon 用过 1 次、Paper 没用过
+// - 排序：最早导入 / 名称 / 槽位完整度 / 应用次数各自改变行序
 // - 筛选：缺文件的（配合 ?mock-broken-files=1 命中缺口主题）、
 //   从未使用的（mock 里两套都用过 → 注入一套未使用的来命中）
 // - 空态：无缺口库选「缺文件的」→「没有缺文件的主题」→ 显示全部恢复
@@ -120,6 +121,21 @@ try {
     JSON.stringify(defaultRows),
   );
 
+  // 应用次数（决策 53）：mock 事件流里 Neon 与 Paper 各用过 1 次
+  const applyCounts = await evaluate(
+    `JSON.stringify({
+      header: [...document.querySelectorAll("th")].some(th => th.textContent.includes("应用次数")),
+      counts: [...document.querySelectorAll("[data-apply-count]")].map(el => el.textContent.trim()),
+    })`,
+  );
+  const counts = JSON.parse(applyCounts);
+  check("表格出现「应用次数」列", counts.header === true);
+  check(
+    "应用次数与事件流一致（Neon / Paper 各 1 次）",
+    counts.counts.length === 2 && counts.counts.every((c) => c === "1 次"),
+    applyCounts,
+  );
+
   // 注入一套「从未使用」的主题：日期最早、名字最小、槽位最少，三种排序都能被它区分
   await evaluate(
     `(() => {
@@ -139,6 +155,12 @@ try {
   );
   await sleep(300);
   check("注入后列表 3 行", (await rowNames()).length === 3, JSON.stringify(await rowNames()));
+  check(
+    "没有使用记录的主题显示「—」",
+    (await evaluate(
+      `document.querySelector("[data-apply-count='unused-fixture-1']")?.textContent.trim()`,
+    )) === "—",
+  );
 
   await setSelect("data-mine-sort", "oldest");
   check(
@@ -156,6 +178,13 @@ try {
   check(
     "按槽位完整度：槽位最少的排最后",
     (await rowNames()).at(-1) === "AAA 未使用",
+    JSON.stringify(await rowNames()),
+  );
+  // 应用次数排序（决策 53）：Neon(1) 在前，没记录的垫底（AAA / Paper 按导入时间新在前）
+  await setSelect("data-mine-sort", "usage");
+  check(
+    "按应用次数：用过的在前，没记录的垫底",
+    JSON.stringify(await rowNames()) === JSON.stringify(["Neon Night", "Paper & Ink", "AAA 未使用"]),
     JSON.stringify(await rowNames()),
   );
   await setSelect("data-mine-sort", "newest");

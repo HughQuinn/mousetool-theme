@@ -24,12 +24,12 @@
 - **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排；错误一律 `Result<T, String>` 且是**用户能照着行动**的中文；I/O 全走 `spawn_blocking`，重操作取 `utils/ops.rs` 锁并发 `*-progress` 事件；入参先过 `utils/validation.rs`，归档读取只走 `utils/limits.rs`。
 - **Theme**（`utils/importer.rs` 等）：zip / `.themepack` / `.theme` / 文件夹四入口一条导入链路；`.inf` 说明书映射优先于文件名推断；导出 zip 附带通用 `.inf`；`theme.json` 磁盘存相对路径、运行时 `resolve_theme` 拼绝对；存储目录迁移与文件完整性体检见手册。
-- **Trash**（`utils/trash.rs`）：删除即软删除进 `trash\<条目 UUID>\`（条目 ID 与主题 ID 分开）；上限 20 套 / 512 MB，超限自动清最早。
+- **Trash**（`utils/trash.rs`）：删除即软删除进 `trash\<条目 UUID>\`（条目 ID 与主题 ID 分开）；上限 20 套 / 512 MB，超限自动清最早；恢复遇同 ID 被占可改「存为副本」（新 UUID、名称加「（副本）」，决策 54）。
 - **Capture**（`utils/capture.rs`）：把外部改写态的当前光标**复制**为我的主题；没抄全绝不自动应用。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码，不转 GIF。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **日志**（`utils/log.rs`）：数据根 `logs\mousetool.log`，512KB 轮转连当前共 3 份，写失败一律静默；非测试代码禁止 `eprintln!`。
-- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；托盘最近主题快速切换（决策 30）；自动切换 / 光标守护 / 自动备份 / 定时切换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33）。
+- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；托盘最近主题快速切换（决策 30）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
 - **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
 - **Integration**（`models/` ↔ `types/`）：前后端字段逐个同名 `snake_case`，不做驼峰转换。
 - **安装器**（`src-tauri/installer/` + `tauri.conf.json` 的 `bundle` 段）：NSIS 整窗自绘模板；坑位密集（`SetCtlColors` 字面量、`;` 逐行写、BOM、makensis 工作目录等），**动它之前先读手册「安装器」一节**。
@@ -41,7 +41,7 @@
 | 导航 | 视图 | 回答的问题 | 检查器 |
 |---|---|---|---|
 | 主题图库 | 分组网格（系统方案 / 我的主题 两段） | 挑哪个？ | 有 |
-| 我的主题 | 数据表（排序 / 筛选 / 批量整理，会话内不落盘，决策 48） | 我导入了什么、要清理哪个？ | 有 |
+| 我的主题 | 数据表（排序 / 筛选 / 批量整理，会话内不落盘，决策 48；应用次数列派生自事件流，决策 53） | 我导入了什么、要清理哪个？ | 有 |
 | 最近使用 | 按自然日分组的时间轴 | 上次用的是哪个？ | **没有** |
 | 设置 | 五个分组（通用/快捷键/数据/系统集成/关于） | 行为怎么配、数据在哪、怎么自查？ | **没有** |
 
@@ -138,7 +138,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 界面/动效脚本跑在浏览器里、走 mock，不写系统光标；**必须与 dev server 同一条命令**（各脚本验收内容见手册）：
 
 ```powershell
-node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/dev_bg.mjs stop
+node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/trash_copy_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/rotate_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`），数据根指向临时目录，不备份 / 还原用户设置。

@@ -1,6 +1,6 @@
 pub mod theme;
 
 pub use theme::{
-    ActiveState, ApplyOutcome, CursorPreview, CursorSlot, CursorTheme, HistoryEntry, ThemeFileGap,
-    ThemesResult,
+    ActiveState, ApplyOutcome, CursorPreview, CursorSlot, CursorTheme, HistoryEntry,
+    ThemeApplyCount, ThemeFileGap, ThemesResult,
 };

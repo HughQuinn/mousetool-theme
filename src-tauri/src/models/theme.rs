@@ -39,6 +39,16 @@ pub struct ThemeFileGap {
     pub slots: Vec<String>,
 }
 
+/// 一套主题在事件流里的应用次数（决策 53）
+///
+/// 事件流上限 200 条，这个数是「最近 200 次以内」的口径，不是历史总数——
+/// 界面要照实说，别让用户当成终身计数器。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeApplyCount {
+    pub theme_id: String,
+    pub count: usize,
+}
+
 /// `get_all_themes` 的返回值：能读到多少给多少，失败项进 `warnings`
 ///
 /// 系统方案（注册表）与用户主题（磁盘）是两个独立来源。以前任何一边出错
@@ -75,6 +85,9 @@ pub struct ThemesResult {
     /// 热更新组合，别的时候当普通字段用。
     #[serde(default)]
     pub file_gaps: Vec<ThemeFileGap>,
+    /// 各主题在事件流里的应用次数（决策 53）；已删除的主题不在界面出现，自然被忽略
+    #[serde(default)]
+    pub apply_counts: Vec<ThemeApplyCount>,
 }
 
 /// `get_active_state` 的返回值：窗口聚焦时轻量重查「当前使用」

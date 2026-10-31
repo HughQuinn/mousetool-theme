@@ -179,10 +179,15 @@ export function listTrash(): Promise<TrashListing> {
   return invoke<TrashListing>("list_trash");
 }
 
-/** 对应 Rust 命令 `restore_from_trash`：把主题搬回当前主题目录 */
-export function restoreFromTrash(entryId: string): Promise<RestoreOutcome> {
-  if (!inTauri) return mockRestoreFromTrash(entryId);
-  return invoke<RestoreOutcome>("restore_from_trash", { entryId });
+/**
+ * 对应 Rust 命令 `restore_from_trash`：把主题搬回当前主题目录
+ *
+ * `asCopy = true` 恢复为副本（决策 54）：目标 ID 已被占用时分配新 UUID 落盘，
+ * 与现有主题并存；不传走原恢复语义。
+ */
+export function restoreFromTrash(entryId: string, asCopy = false): Promise<RestoreOutcome> {
+  if (!inTauri) return mockRestoreFromTrash(entryId, asCopy);
+  return invoke<RestoreOutcome>("restore_from_trash", { entryId, asCopy });
 }
 
 /** 对应 Rust 命令 `delete_from_trash`：彻底删除一个条目 */

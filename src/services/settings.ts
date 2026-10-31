@@ -61,6 +61,10 @@ export interface SettingsSnapshot {
   schedule_in_id: string | null;
   /** 时间段外使用的主题 ID；null = 期间外不切换 */
   schedule_out_id: string | null;
+  /** 定时轮换主题：按固定间隔在「我的主题」里轮着应用（逻辑在 `lib/theme-rotate.ts`，决策 55） */
+  rotate_enabled: boolean;
+  /** 轮换间隔（分钟，15–1440） */
+  rotate_interval_minutes: number;
   /** 读取设置时的非致命问题（典型：文件损坏已自动备份） */
   warnings: string[];
 }
@@ -93,6 +97,8 @@ export interface SettingsPatch {
   /** 同主题 ID 映射：清空用空串（后端 normalize_theme_id） */
   schedule_in_id?: string;
   schedule_out_id?: string;
+  rotate_enabled?: boolean;
+  rotate_interval_minutes?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +127,8 @@ export function updateSettings(patch: SettingsPatch): Promise<SettingsSnapshot> 
     scheduleEnd: patch.schedule_end,
     scheduleInId: patch.schedule_in_id,
     scheduleOutId: patch.schedule_out_id,
+    rotateEnabled: patch.rotate_enabled,
+    rotateIntervalMinutes: patch.rotate_interval_minutes,
   });
 }
 

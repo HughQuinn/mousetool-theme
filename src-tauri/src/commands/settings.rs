@@ -41,6 +41,10 @@ pub struct SettingsSnapshot {
     pub schedule_in_id: Option<String>,
     /// 时间段外使用的主题 ID；`None` = 期间外不切换
     pub schedule_out_id: Option<String>,
+    /// 定时轮换主题：按固定间隔在「我的主题」里轮着应用（决策 55）
+    pub rotate_enabled: bool,
+    /// 轮换间隔（分钟，15–1440）
+    pub rotate_interval_minutes: u32,
     /// 读取设置时的非致命问题（典型：文件损坏已自动备份）
     pub warnings: Vec<String>,
 }
@@ -72,6 +76,8 @@ fn snapshot(loaded: &settings::SettingsLoad) -> Result<SettingsSnapshot, String>
         schedule_end: loaded.settings.schedule_end.clone(),
         schedule_in_id: loaded.settings.schedule_in_id.clone(),
         schedule_out_id: loaded.settings.schedule_out_id.clone(),
+        rotate_enabled: loaded.settings.rotate_enabled,
+        rotate_interval_minutes: loaded.settings.rotate_interval_minutes,
         warnings: loaded.warnings.clone(),
     })
 }
@@ -111,6 +117,8 @@ pub async fn update_settings(
     schedule_end: Option<String>,
     schedule_in_id: Option<String>,
     schedule_out_id: Option<String>,
+    rotate_enabled: Option<bool>,
+    rotate_interval_minutes: Option<u32>,
 ) -> Result<SettingsSnapshot, String> {
     let updated = tauri::async_runtime::spawn_blocking(move || {
         let mut state = settings::read();
@@ -158,6 +166,12 @@ pub async fn update_settings(
         if let Some(raw) = schedule_out_id {
             state.schedule_out_id = normalize_theme_id(raw);
         }
+        if let Some(flag) = rotate_enabled {
+            state.rotate_enabled = flag;
+        }
+        if let Some(minutes) = rotate_interval_minutes {
+            state.rotate_interval_minutes = validate_rotate_interval(minutes)?;
+        }
         settings::write(&state)?;
         snapshot(&settings::load())
     })
@@ -174,6 +188,17 @@ fn validate_auto_backup_keep(keep: u32) -> Result<u32, String> {
         Ok(keep)
     } else {
         Err(format!("自动备份保留份数应在 1–100 之间（收到 {keep}）"))
+    }
+}
+
+/// 定时轮换间隔：15 分钟–24 小时；前端下拉只给固定档位，这里是最后一道校验
+fn validate_rotate_interval(minutes: u32) -> Result<u32, String> {
+    if (15..=1440).contains(&minutes) {
+        Ok(minutes)
+    } else {
+        Err(format!(
+            "定时轮换间隔应在 15 分钟到 24 小时之间（收到 {minutes} 分钟）"
+        ))
     }
 }
 
@@ -259,6 +284,16 @@ mod tests {
         assert_eq!(validate_auto_backup_keep(100).unwrap(), 100);
         assert!(validate_auto_backup_keep(0).is_err());
         assert!(validate_auto_backup_keep(101).is_err());
+    }
+
+    #[test]
+    fn 定时轮换间隔只认_15_1440() {
+        assert_eq!(validate_rotate_interval(15).unwrap(), 15);
+        assert_eq!(validate_rotate_interval(60).unwrap(), 60);
+        assert_eq!(validate_rotate_interval(1440).unwrap(), 1440);
+        assert!(validate_rotate_interval(0).is_err());
+        assert!(validate_rotate_interval(14).is_err());
+        assert!(validate_rotate_interval(1441).is_err());
     }
 
     #[test]
