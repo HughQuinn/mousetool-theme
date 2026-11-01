@@ -98,7 +98,7 @@ for (const t of TARGETS) {
 
 // 2) 扫描所有需要维护的文档
 const scanFiles = [
-  "agents.md",
+  "AGENTS.md",
   ...fs
     .readdirSync(DOCS_DIR)
     .filter((f) => f.endsWith(".md"))
@@ -253,7 +253,7 @@ const archText = read("docs/mouse-theme架构设计.md");
 const archHeading = /##\s*5\.\s*命令契约（当前共\s*(\d+)\s*个）/.exec(archText);
 const archSection = archText.split(/^##\s*5\./m)[1]?.split(/^##\s*6\./m)[0] ?? "";
 const archRows = (archSection.match(/^\|\s*`/gm) ?? []).length;
-const agentsText = read("agents.md");
+const agentsText = read("AGENTS.md");
 const agentsCount = /(\d+)\s*个 Tauri 命令/.exec(agentsText);
 
 for (const [label, value] of [
@@ -296,7 +296,7 @@ console.log(`决策总览：正文 ${decisionNums.size} 条 / 总览 ${overviewN
 const ci = read(".github/workflows/ci.yml");
 if (/\bcargo\s+clippy\b/.test(ci)) {
   for (const file of [
-    "agents.md",
+    "AGENTS.md",
     DECISION_DOC,
     "docs/mouse-theme需求描述.md",
     "docs/mouse-theme架构设计.md",

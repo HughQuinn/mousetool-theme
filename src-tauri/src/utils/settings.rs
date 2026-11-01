@@ -82,6 +82,12 @@ pub struct AppSettings {
     pub schedule_in_id: Option<String>,
     /// 时间段外使用的主题 ID；`None` = 期间外不切换
     pub schedule_out_id: Option<String>,
+    /// 定时轮换主题：按固定间隔在「我的主题」里轮着应用（逻辑在前端，见
+    /// `lib/theme-rotate.ts`；这里只存偏好）。默认关闭，且是优先级最低的
+    /// 自动行为——定时切换 / 跟随系统开启时让位（决策 55）
+    pub rotate_enabled: bool,
+    /// 轮换间隔（分钟）；合法范围 15–1440，由 `update_settings` 校验
+    pub rotate_interval_minutes: u32,
 }
 
 impl Default for AppSettings {
@@ -102,6 +108,8 @@ impl Default for AppSettings {
             schedule_end: "18:00".to_string(),
             schedule_in_id: None,
             schedule_out_id: None,
+            rotate_enabled: false,
+            rotate_interval_minutes: 60,
         }
     }
 }
@@ -499,6 +507,33 @@ mod tests {
         assert_eq!(loaded.schedule_start, "09:00");
         assert_eq!(loaded.schedule_end, "18:00");
         assert!(loaded.schedule_in_id.is_none());
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 定时轮换默认关闭且间隔写读往返() {
+        let file = temp_file("rotate");
+        assert!(
+            !AppSettings::default().rotate_enabled,
+            "默认必须是关：不能凭空替用户换主题"
+        );
+        assert_eq!(AppSettings::default().rotate_interval_minutes, 60);
+
+        let settings = AppSettings {
+            rotate_enabled: true,
+            rotate_interval_minutes: 240,
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.rotate_enabled);
+        assert_eq!(loaded.rotate_interval_minutes, 240);
+
+        // 旧版本文件缺字段：开关补默认关、间隔补 60，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"exit"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.rotate_enabled);
+        assert_eq!(loaded.rotate_interval_minutes, 60);
         let _ = fs::remove_file(&file);
     }
 

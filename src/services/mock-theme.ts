@@ -46,6 +46,17 @@ function stampMinutesAgo(minutes: number): string {
 /** 浏览器里没有 history.json，用内存数组模拟，方便开发时走通「最近使用」 */
 let devRecent: HistoryEntry[] = [...MOCK_RECENT];
 
+/** 事件流 → 各主题应用次数（决策 53）；口径与 Rust 侧 `counts_from_events` 一致 */
+function countApplyCounts(events: HistoryEntry[]): { theme_id: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const entry of events) {
+    counts.set(entry.theme_id, (counts.get(entry.theme_id) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([theme_id, count]) => ({ theme_id, count }));
+}
+
 /**
  * 浏览器里模拟「已导入主题」的内存数组（最新在前）
  *
@@ -169,17 +180,19 @@ export function mockGetAllThemes(): Promise<ThemesResult> {
   if (new URLSearchParams(window.location.search).has("mock-fail")) {
     return Promise.reject(new Error("读取光标方案被拒绝（EACCES，模拟）"));
   }
-  // 浏览器里读不到注册表，用 mock 状态回填（槽位数编一个自洽的）
-  return Promise.resolve({
-    themes: [
-      ...devThemes,
-      ...MOCK_THEMES.filter((theme) => !devHiddenThemeIds.has(theme.id)),
-    ],
-    warnings: [],
-    ...devCurrentState(),
-    recent: devRecent,
-    file_gaps: devFileGaps(),
-  });
+    // 浏览器里读不到注册表，用 mock 状态回填（槽位数编一个自洽的）
+    return Promise.resolve({
+      themes: [
+        ...devThemes,
+        ...MOCK_THEMES.filter((theme) => !devHiddenThemeIds.has(theme.id)),
+      ],
+      warnings: [],
+      ...devCurrentState(),
+      recent: devRecent,
+      file_gaps: devFileGaps(),
+      // 应用次数（决策 53）：真机由事件流派生，浏览器里从同一份内存事件流数出来
+      apply_counts: countApplyCounts(devRecent),
+    });
 }
 
 /** 浏览器里的查重模拟：`?mock-duplicates=1` 时把前两套「我的主题」编成一组 */
@@ -372,7 +385,7 @@ export function mockListTrash(): Promise<TrashListing> {
   });
 }
 
-export function mockRestoreFromTrash(entryId: string): Promise<RestoreOutcome> {
+export function mockRestoreFromTrash(entryId: string, asCopy = false): Promise<RestoreOutcome> {
   const found = devTrash.get(entryId);
   if (!found) {
     return Promise.reject(new Error("回收站里没有这个条目，可能已被清理"));
@@ -380,12 +393,28 @@ export function mockRestoreFromTrash(entryId: string): Promise<RestoreOutcome> {
   if (found.entry.status !== "ok") {
     return Promise.reject(new Error("回收站记录已损坏，无法恢复"));
   }
+  if (asCopy) {
+    // 副本（决策 54）：新 ID、名称加「（副本）」（与 Rust 侧同款 40 字截断，
+    // 按字符数不按码元），原条目消费掉；藏起来的示例主题不取消隐藏——
+    // 那是同 ID 的原份
+    const suffix = "（副本）";
+    const stem = [...found.theme.name.trim()].slice(0, 40 - suffix.length).join("") || "未命名主题";
+    const copy: CursorTheme = {
+      ...found.theme,
+      id: crypto.randomUUID(),
+      name: `${stem}${suffix}`,
+      cursors: found.theme.cursors.map((slot) => ({ ...slot })),
+    };
+    devTrash.delete(entryId);
+    devThemes = [copy, ...devThemes];
+    return Promise.resolve({ theme_id: copy.id, warning: null });
+  }
   devTrash.delete(entryId);
   // 删除时藏起来的 mock 主题：取消隐藏即可原样回来；导入过的主题则重新加入列表
   if (!devHiddenThemeIds.delete(found.theme.id)) {
     devThemes = [found.theme, ...devThemes];
   }
-  return Promise.resolve({ warning: null });
+  return Promise.resolve({ theme_id: found.theme.id, warning: null });
 }
 
 export function mockDeleteFromTrash(entryId: string): Promise<void> {

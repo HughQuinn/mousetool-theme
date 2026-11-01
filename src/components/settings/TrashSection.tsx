@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, CopyPlus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +33,10 @@ interface TrashSectionProps {
  */
 export function TrashSection({ onBack }: TrashSectionProps) {
   const restoreTrashEntry = useThemeStore((s) => s.restoreTrashEntry);
+  // 主题库清单用来判断「同 ID 已存在」：命中时行内出现「存为副本」（决策 54）。
+  // selector 只拿 themes 本身（返回新数组会无限重渲染），派生交给 useMemo
+  const themes = useThemeStore((s) => s.themes);
+  const existingIds = useMemo(() => new Set(themes.map((theme) => theme.id)), [themes]);
 
   const [listing, setListing] = useState<TrashListing | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -77,6 +81,15 @@ export function TrashSection({ onBack }: TrashSectionProps) {
     if (busy[key] || entry.status !== "ok") return;
     setBusyFlag(key, true);
     const restored = await restoreTrashEntry(entry);
+    setBusyFlag(key, false);
+    if (restored) await refresh();
+  };
+
+  const restoreAsCopy = async (entry: TrashEntry) => {
+    const key = `restore:${entry.id}`;
+    if (busy[key] || entry.status !== "ok") return;
+    setBusyFlag(key, true);
+    const restored = await restoreTrashEntry(entry, { asCopy: true });
     setBusyFlag(key, false);
     if (restored) await refresh();
   };
@@ -283,6 +296,22 @@ export function TrashSection({ onBack }: TrashSectionProps) {
                         <RotateCcw data-icon="inline-start" />
                         {restoring ? "恢复中…" : "恢复"}
                       </Button>
+                      {/* 同 ID 已在主题库时普通恢复会被后端拒绝（决策 26），
+                          给一条「存为副本」的出路：新 UUID 落盘、与现有主题并存（决策 54） */}
+                      {!damaged && existingIds.has(entry.theme_id) && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          data-trash-copy={entry.id}
+                          aria-label={`存为副本「${entry.name}」`}
+                          title="主题库已有同 ID 主题：以新主题 ID 恢复一份副本，与现有主题并存（名称自动加「（副本）」）"
+                          onClick={() => void restoreAsCopy(entry)}
+                          disabled={restoring || purging}
+                          className="text-muted-foreground"
+                        >
+                          <CopyPlus />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"

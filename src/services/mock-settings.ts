@@ -46,6 +46,8 @@ const MOCK_DEFAULT: SettingsSnapshot = {
   schedule_end: "18:00",
   schedule_in_id: null,
   schedule_out_id: null,
+  rotate_enabled: false,
+  rotate_interval_minutes: 60,
   warnings: [],
 };
 

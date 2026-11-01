@@ -23,7 +23,13 @@ import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
-import { mineThemes, missingSlotsOf, type MineFilter, type MineSort } from "@/lib/themes";
+import {
+  applyCountOf,
+  mineThemes,
+  missingSlotsOf,
+  type MineFilter,
+  type MineSort,
+} from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { actionBusyKey, BATCH_DELETE_BUSY_KEY, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
@@ -43,6 +49,7 @@ export function MyThemesView() {
   const themes = useThemeStore((s) => s.themes);
   const fileGaps = useThemeStore((s) => s.fileGaps);
   const recent = useThemeStore((s) => s.recent);
+  const applyCounts = useThemeStore((s) => s.applyCounts);
   const query = useThemeStore((s) => s.searchQuery);
   const setSearchQuery = useThemeStore((s) => s.setSearchQuery);
   const loading = useThemeStore((s) => s.loading);
@@ -73,8 +80,8 @@ export function MyThemesView() {
   );
 
   const rows = useMemo(
-    () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds }),
-    [themes, query, sort, filter, fileGaps, usedIds],
+    () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds, applyCounts }),
+    [themes, query, sort, filter, fileGaps, usedIds, applyCounts],
   );
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
@@ -306,6 +313,7 @@ export function MyThemesView() {
                   <option value="oldest">最早导入在前</option>
                   <option value="name">按名称</option>
                   <option value="slots">按槽位完整度</option>
+                  <option value="usage">按应用次数</option>
                 </select>
                 <select
                   aria-label="筛选"
@@ -373,6 +381,9 @@ export function MyThemesView() {
             </th>
             <th scope="col" className="w-28 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
               导入于
+            </th>
+            <th scope="col" className="w-20 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
+              应用次数
             </th>
             <th scope="col" className="w-24 px-3 py-2 text-right text-xs font-normal text-muted-foreground">
               操作
@@ -486,6 +497,19 @@ export function MyThemesView() {
                 <td className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
                   <span className="block">{importDate}</span>
                   {importTime && <span className="block text-2xs">{importTime}</span>}
+                </td>
+
+                {/* 应用次数（决策 53）：事件流里的口径，没记录显示「—」；
+                    上限来自事件流本身（200 条），title 里说清不是终身计数 */}
+                <td className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
+                  <span
+                    data-apply-count={theme.id}
+                    title="在最近 200 条使用记录里被应用的次数；不是历史总数"
+                  >
+                    {applyCountOf(applyCounts, theme.id) === null
+                      ? "—"
+                      : `${applyCountOf(applyCounts, theme.id)} 次`}
+                  </span>
                 </td>
 
                 <td className="relative z-10 px-3 py-2.5">

@@ -17,11 +17,22 @@ pub async fn list_trash() -> Result<trash::TrashListing, String> {
 }
 
 /// 把一套主题从回收站恢复到当前主题目录
+///
+/// `asCopy = true` 时恢复为**副本**（决策 54）：目标 ID 已被占用时不再拒绝，
+/// 分配新 UUID 落盘并与现有主题并存；不传或 false 走原恢复语义。
 #[tauri::command]
-pub async fn restore_from_trash(app: AppHandle, entry_id: String) -> Result<trash::RestoreOutcome, String> {
+pub async fn restore_from_trash(
+    app: AppHandle,
+    entry_id: String,
+    as_copy: Option<bool>,
+) -> Result<trash::RestoreOutcome, String> {
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("恢复主题")?;
-        trash::restore(&entry_id)
+        if as_copy.unwrap_or(false) {
+            trash::restore_as_copy(&entry_id)
+        } else {
+            trash::restore(&entry_id)
+        }
     })
     .await
     .map_err(|err| format!("恢复主题任务异常退出（{err}）"))?;

@@ -8,7 +8,8 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{
-    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemeFileGap, ThemesResult,
+    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemeApplyCount, ThemeFileGap,
+    ThemesResult,
 };
 use crate::utils::{
     capture, history, importer, inf_export, limits, ops, paths, progress, registry, theme_paths,
@@ -237,6 +238,8 @@ pub(crate) struct ThemesSnapshot {
     pub warnings: Vec<String>,
     pub active: ActiveInfo,
     pub recent: Vec<HistoryEntry>,
+    /// 各主题在事件流里的应用次数（决策 53）；托盘与聚焦重查用不到，随快照白带
+    pub apply_counts: Vec<ThemeApplyCount>,
 }
 
 impl ThemesSnapshot {
@@ -253,6 +256,7 @@ impl ThemesSnapshot {
                 warning: None,
             },
             recent: Vec::new(),
+            apply_counts: Vec::new(),
         }
     }
 }
@@ -270,15 +274,22 @@ pub(crate) fn collect_snapshot() -> ThemesSnapshot {
         warnings.push(warn);
     }
 
-    // 历史是附属数据：读坏了只提示，不影响主题列表
-    let (recent, history_warnings) = history::read_history();
+    // 历史是附属数据：读坏了只提示，不影响主题列表。
+    // 事件流只在这里读一次：去重派生「最近主题」，逐条数出「应用次数」（决策 53）
+    let (events, history_warnings) = history::read_events();
     warnings.extend(history_warnings);
+    let recent = history::recent_from_events(&events);
+    let apply_counts = history::counts_from_events(&events)
+        .into_iter()
+        .map(|(theme_id, count)| ThemeApplyCount { theme_id, count })
+        .collect();
 
     ThemesSnapshot {
         themes,
         warnings,
         active,
         recent,
+        apply_counts,
     }
 }
 
@@ -305,6 +316,7 @@ fn all_themes() -> Result<ThemesResult, String> {
         active_external: snapshot.active.external,
         recent: snapshot.recent,
         file_gaps,
+        apply_counts: snapshot.apply_counts,
     })
 }
 

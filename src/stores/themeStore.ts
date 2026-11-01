@@ -112,6 +112,8 @@ interface ThemeStore {
    * 后端每次读列表现算；「我的主题」行内提示、检查器警示条与诊断中心都从这里取。
    */
   fileGaps: ThemeFileGap[];
+  /** 各主题在事件流里的应用次数（决策 53），按主题 ID 查表；旧后端给不出时为空对象 */
+  applyCounts: Record<string, number>;
   /** 每个页面各自选中的主题 ID；`recent` 页没有检查器，恒为 null */
   selection: Selection;
   /** 搜索关键词（切页清空，见 setCurrentPage） */
@@ -180,8 +182,16 @@ interface ThemeStore {
    * 命令失败（错误已提示）。
    */
   deleteThemes: (ids: string[]) => Promise<BatchDeleteOutcome | null>;
-  /** 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里 */
-  restoreTrashEntry: (entry: TrashEntry) => Promise<boolean>;
+  /**
+   * 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里
+   *
+   * `asCopy = true` 恢复为副本（决策 54）：目标 ID 已被占用时也收下，
+   * 落成新 UUID 的新主题；界面拿返回的 theme_id 选中那份副本。
+   */
+  restoreTrashEntry: (
+    entry: TrashEntry,
+    options?: { asCopy?: boolean },
+  ) => Promise<boolean>;
   renameTheme: (id: string, newName: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
   /**
@@ -222,6 +232,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   currentSlotsFilled: 0,
   recent: [],
   fileGaps: [],
+  applyCounts: {},
   selection: NO_SELECTION,
   searchQuery: "",
   currentPage: "gallery",
@@ -244,8 +255,16 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loadThemes: async () => {
     set({ loading: true, loadError: null });
     try {
-      const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent, file_gaps } =
-        await getAllThemes();
+      const {
+        themes,
+        warnings,
+        active_theme_id,
+        current_slots_filled,
+        active_external,
+        recent,
+        file_gaps,
+        apply_counts,
+      } = await getAllThemes();
       // 重载意味着文件可能动过了（回收站恢复、目录迁移、外部改写）：
       // 旧预览一律作废，让界面按新状态重新取图
       invalidateCursorPreviews();
@@ -263,6 +282,10 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         recent: recent ?? [],
         // file_gaps 同理兜底：旧后端不认识这个字段，别让缺口提示整体挂掉
         fileGaps: file_gaps ?? [],
+        // apply_counts（决策 53）同样兜底；只保留仍在列表里的主题
+        applyCounts: Object.fromEntries(
+          (apply_counts ?? []).filter((item) => ids.has(item.theme_id)).map((item) => [item.theme_id, item.count]),
+        ),
         warnings,
         warningsDismissed: false,
         // 只清掉「已经不存在的主题」，其余选择保留：
@@ -310,7 +333,13 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
       const outcome = await apiApplyTheme(theme);
-      set({ activeThemeId: id, activeExternal: false, recent: outcome.recent });
+      set((state) => ({
+        activeThemeId: id,
+        activeExternal: false,
+        recent: outcome.recent,
+        // 次数跟着事件流走：应用成功就地 +1，与「最近使用」同一次更新（决策 53）
+        applyCounts: { ...state.applyCounts, [id]: (state.applyCounts[id] ?? 0) + 1 },
+      }));
       if (!options?.silent) {
         toast.success(
           `已应用「${theme.name}」`,
@@ -545,21 +574,35 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  restoreTrashEntry: async (entry) => {
+  restoreTrashEntry: async (entry, options) => {
+    const asCopy = options?.asCopy ?? false;
     try {
-      const outcome = (await apiRestoreFromTrash(entry.id)) ?? { warning: null };
+      const outcome =
+        (await apiRestoreFromTrash(entry.id, asCopy)) ?? { theme_id: null, warning: null };
       await get().loadThemes();
-      // 恢复目标可能因为列表读取失败而不在本地列表里；只有确实回来了才选中
-      if (get().themes.some((theme) => theme.id === entry.theme_id)) {
+      // 副本（决策 54）落在新 UUID 下，普通恢复沿用原 ID；旧后端不给 theme_id
+      // 时按原 ID 兜底。恢复目标可能因为列表读取失败而不在本地列表里，
+      // 只有确实回来了才选中
+      const restoredId = outcome.theme_id ?? entry.theme_id;
+      if (get().themes.some((theme) => theme.id === restoredId)) {
         set((state) => ({
           selection: {
             ...state.selection,
-            gallery: entry.theme_id,
-            mine: entry.theme_id,
+            gallery: restoredId,
+            mine: restoredId,
           },
         }));
       }
-      if (outcome.warning) {
+      if (asCopy) {
+        if (outcome.warning) {
+          toast.warning(`已存为副本「${entry.name}」`, outcome.warning);
+        } else {
+          toast.success(
+            `已存为副本「${entry.name}」`,
+            "以新主题 ID 恢复，与主题库里的同名主题并存；可在「我的主题」里改名",
+          );
+        }
+      } else if (outcome.warning) {
         toast.warning(`已恢复「${entry.name}」`, outcome.warning);
       } else {
         toast.success(`已恢复「${entry.name}」`, "已重新出现在主题图库与我的主题里");
@@ -667,8 +710,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
       const count = await apiClearHistory();
-      // 本地列表同步清空：不然「最近使用」页要等下次重载才肯变空
-      set({ recent: [] });
+      // 本地列表同步清空：不然「最近使用」页要等下次重载才肯变空。
+      // 次数（决策 53）派生自同一份事件流，一起清零
+      set({ recent: [], applyCounts: {} });
       toast.success(
         count > 0 ? `已清空 ${count} 条使用记录` : "没有可清空的使用记录",
         "主题与设置不受影响",
