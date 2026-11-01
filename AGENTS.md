@@ -21,7 +21,7 @@
 
 ## 职责边界（同一仓库，不是独立进程；明细见手册）
 
-- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。
+- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。提示口径：toast 只报事件不报状态——设置开关成功静默、注册表类操作成功也弹（决策 56）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排；错误一律 `Result<T, String>` 且是**用户能照着行动**的中文；I/O 全走 `spawn_blocking`，重操作取 `utils/ops.rs` 锁并发 `*-progress` 事件；入参先过 `utils/validation.rs`，归档读取只走 `utils/limits.rs`。
 - **Theme**（`utils/importer.rs` 等）：zip / `.themepack` / `.theme` / 文件夹四入口一条导入链路；`.inf` 说明书映射优先于文件名推断；导出 zip 附带通用 `.inf`；`theme.json` 磁盘存相对路径、运行时 `resolve_theme` 拼绝对；存储目录迁移与文件完整性体检见手册。
 - **Trash**（`utils/trash.rs`）：删除即软删除进 `trash\<条目 UUID>\`（条目 ID 与主题 ID 分开）；上限 20 套 / 512 MB，超限自动清最早；恢复遇同 ID 被占可改「存为副本」（新 UUID、名称加「（副本）」，决策 54）。
