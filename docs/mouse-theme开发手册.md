@@ -172,7 +172,11 @@ PID，绝不通配杀）并清理临时目录。**前置：应用未在运行**�
 `verify_themepack.mjs`（决策 39：`makecab.exe` 打包的 MSZIP 真实 CAB、包内
 `.theme` 映射、DisplayName 优先）、`verify_batch_delete.mjs`（决策 43：真实
 IPC 下导入两套 → 批量删除（重复 / 非法 ID）→ 主题库清空、回收站两条正常）、
-`verify_import_duplicate.mjs`（决策 47：同内容包二次导入点名重复、不拦截）与
+`verify_import_duplicate.mjs`（决策 47：同内容包二次导入点名重复、不拦截）、
+`verify_iterate_features.mjs`（决策 53/54/55：隔离数据根手写事件流验证
+`apply_counts` 真机派生与窗口展示、`asCopy` 副本恢复的真实落盘与同 ID 冲突
+拒绝、轮换设置的 settings.json 落盘与越界拒绝——**全程不调 `apply_theme`**，
+真机注册表不隔离）与
 `verify_cursor_size.mjs`（决策 51：光标大小注册表假设的真机证伪——唯一不启动
 应用的例外，整键备份还原，退出码 1 = 假设未证实）。
 **不进 CI、不入 `AGENTS.md` 验证链**——它们碰真实文件系统，改动导入链路（决策
