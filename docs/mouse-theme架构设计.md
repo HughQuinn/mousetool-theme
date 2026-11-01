@@ -168,7 +168,7 @@ App.tsx
 | `set_zip_menu` | `register`（布尔） | `void` | 注册表写失败（试点功能，决策 12） |
 | `take_pending_import` | — | `String \| null` | **不失败**（无待导入 / 文件损坏都返回 null，领取即删除） |
 | `get_settings` | — | `SettingsSnapshot` | 数据根不可用；设置文件缺失 / 损坏退回默认值——损坏文件先自动改名备份（`.corrupt-<时间>.bak`），并随 `warnings` 返回提示 |
-| `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`, `autoSwitchEnabled?`, `autoSwitchLightId?`, `autoSwitchDarkId?`, `cursorGuardEnabled?`, `autoBackupEnabled?`, `autoBackupKeep?`, `scheduleSwitchEnabled?`, `scheduleStart?`, `scheduleEnd?`, `scheduleInId?`, `scheduleOutId?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、保留份数不在 1–100、时间不是合法 `HH:MM`、写盘失败；关闭行为变更会同步托盘有无；主题 ID 用空串表示清空 |
+| `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`, `autoSwitchEnabled?`, `autoSwitchLightId?`, `autoSwitchDarkId?`, `cursorGuardEnabled?`, `autoBackupEnabled?`, `autoBackupKeep?`, `scheduleSwitchEnabled?`, `scheduleStart?`, `scheduleEnd?`, `scheduleInId?`, `scheduleOutId?`, `rotateEnabled?`, `rotateIntervalMinutes?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、保留份数不在 1–100、时间不是合法 `HH:MM`、轮换间隔不在 15–1440、写盘失败；关闭行为变更会同步托盘有无；主题 ID 用空串表示清空 |
 | `get_autostart` | — | `AutostartStatus` | **不失败**（读不到就当未注册）；开启时 `exe_path` 返回注册表里实际登记的程序路径 |
 | `set_autostart` | `enable`（布尔） | `AutostartStatus` | Run 键写/删失败；状态以注册表回读为准 |
 | `preview_themes_dir` | `path?`（字符串 \| null） | `ThemesDirPlan` | 目标不是绝对路径 / UNC / 经过重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录；只校验统计，**不搬文件** |
@@ -183,7 +183,7 @@ App.tsx
 | `run_auto_backup` | `keep`（保留份数） | `AutoBackupSummary`（`created` / `skipped` / `file_name` / `pruned`） | 当天已有自动备份则跳过并顺带清理过期（`created=false`）；空库返回「还没有可备份的内容」；与手动备份共用 `ops` 锁，冲突立即失败（决策 32）；不发 `backup-progress` |
 | `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、超限额（1GiB 总量 / 64MB 单文件 / 4096 条目 / 10 层）、条目名不合法、写盘失败（清掉本次新建主题目录）；条目数据损坏（CRC）拒绝并点名坏条目、说明恢复已全部撤销、指引体检（决策 40）；恢复后按新根重写相对路径，失败项进 `warnings`；执行期发 `backup-progress` |
 | `list_trash` | — | `TrashListing`（`entries` + `max_entries` / `max_bytes`） | 目录不存在返回空；只扫 `trash` 一级 UUID 目录、跳过链接 / 目录联接；快照或 `theme.json` 无法恢复标 `status="damaged"` 并附中文原因（保留可见、可清理） |
-| `restore_from_trash` | `entryId` | `RestoreOutcome` | 非规范 UUID、快照与目录不一致、快照损坏、`theme.json` 损坏 / ID 不符 / 自称系统方案 / 没有槽位、目标已有同 ID 主题；条目保持原样，执行期取 `ops` 锁 |
+| `restore_from_trash` | `entryId`、`asCopy?`（布尔，决策 54） | `RestoreOutcome`（`theme_id` + `warning`） | 非规范 UUID、快照与目录不一致、快照损坏、`theme.json` 损坏 / ID 不符 / 自称系统方案 / 没有槽位、目标已有同 ID 主题（`asCopy = true` 时改为分配新 UUID 复制落盘，名称加「（副本）」，失败清理半成品、条目保留）；条目保持原样（普通恢复），执行期取 `ops` 锁 |
 | `delete_from_trash` | `entryId` | `void` | 非规范 UUID、条目不存在、链接 / 目录联接；只删 `trash\<entryId>`，执行期取 `ops` 锁 |
 | `empty_trash` | — | `EmptyOutcome`（`removed` / `failed`） | 单个条目删不掉只进 `failed`，其余照常删除；执行期取 `ops` 锁 |
 
@@ -210,13 +210,13 @@ App.tsx
 | `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 运行时是绝对路径（直接写注册表）；**落盘到 `theme.json` / 备份 zip 时只存相对主题目录的路径**（决策 17） |
 | `CursorTheme` | `id`、`name`、`description`、`created_at`、`updated_at`、`is_built_in`、`cursors` | `id`：`sys_<名>` 或 UUID |
 | `ImportReport` | `theme`、`warnings` | `import_theme` 的返回值；链接 / 目录联接等跳过项进 `warnings` |
-| `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`current_slots_filled`、`active_external`、`recent`、`file_gaps` | 部分成功的载体；`recent` 是从事件流派生的最近主题（去重、最多 50）；`active_external` = 槽位非空但匹配不到任何主题（决策 24）；`file_gaps` 是文件缺口清单（决策 31），只列「声明了的槽位文件读不到」的主题，每次读列表现算、不落盘 |
+| `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`current_slots_filled`、`active_external`、`recent`、`file_gaps`、`apply_counts` | 部分成功的载体；`recent` 是从事件流派生的最近主题（去重、最多 50）；`active_external` = 槽位非空但匹配不到任何主题（决策 24）；`file_gaps` 是文件缺口清单（决策 31），只列「声明了的槽位文件读不到」的主题，每次读列表现算、不落盘；`apply_counts` 是各主题在事件流里的应用次数（决策 53，事件流上限 200 条），`#[serde(default)]` 兜旧后端 |
 | `ThemeFileGap` | `theme_id`、`slots` | 一套主题的缺口：`slots` 为缺失 / 不可读槽位的注册表键名（保持声明顺序） |
 | `ActiveState` | `active_theme_id`、`current_slots_filled`、`active_external` | `get_active_state` 的返回值：聚焦时轻量重查「当前使用」三态 |
 | `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚；`recent` 为派生视图 |
 | `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
 | `HistoryEntry` | `theme_id`、`name`、`is_built_in`、`applied_at` | 一条**使用事件**（名称是快照）；磁盘事件流上限 200 条，界面 `recent` 去重后最多 50 |
-| `SettingsSnapshot` | `close_behavior`、`themes_dir`、`effective_themes_dir`、`auto_check_update`、`shortcuts_enabled`、`auto_switch_enabled`、`auto_switch_light_id`、`auto_switch_dark_id`、`cursor_guard_enabled`、`auto_backup_enabled`、`auto_backup_keep`、`schedule_switch_enabled`、`schedule_start`、`schedule_end`、`schedule_in_id`、`schedule_out_id`、`warnings` | `warnings` 为读取时的非致命问题（典型：设置文件损坏已备份）；`cursor_guard_enabled` 默认 false（决策 29）；`auto_backup_*` 默认关 / 10（决策 32）；`schedule_*` 默认关 / 09:00–18:00（决策 33） |
+| `SettingsSnapshot` | `close_behavior`、`themes_dir`、`effective_themes_dir`、`auto_check_update`、`shortcuts_enabled`、`auto_switch_enabled`、`auto_switch_light_id`、`auto_switch_dark_id`、`cursor_guard_enabled`、`auto_backup_enabled`、`auto_backup_keep`、`schedule_switch_enabled`、`schedule_start`、`schedule_end`、`schedule_in_id`、`schedule_out_id`、`rotate_enabled`、`rotate_interval_minutes`、`warnings` | `warnings` 为读取时的非致命问题（典型：设置文件损坏已备份）；`cursor_guard_enabled` 默认 false（决策 29）；`auto_backup_*` 默认关 / 10（决策 32）；`schedule_*` 默认关 / 09:00–18:00（决策 33）；`rotate_*` 默认关 / 60 分钟、合法 15–1440（决策 55） |
 | `AutostartStatus` | `enabled`、`exe_path` | `exe_path` 是注册表实际登记的程序路径，未开启时为空串 |
 | `ExportSummary` | `file_count`、`skipped` | 跳过原因给界面提示 |
 | `ExportBackupSummary` / `ImportBackupSummary` / `AutoBackupSummary` | 主题/文件/记录计数、`warnings`；`created`、`skipped`、`file_name`、`pruned` | 备份恢复是合并语义；路径改写等非致命问题进 `warnings`；`AutoBackupSummary` 是自动备份的结果（决策 32） |
@@ -231,7 +231,7 @@ App.tsx
 | `ThemesDirProgress` | `phase`、`current`、`total`、`message` | `phase` 固定为 copy / verify / switch / registry / settings / cleanup / done |
 | `TaskProgress` | `stage`、`current`、`total`、`message` | `import-progress` / `backup-progress` 的载荷；`current/total` 可为 0（收尾阶段），百分比不变时不重复发 |
 | `TrashListing` / `TrashEntry` | `entries`、`max_entries`、`max_bytes`；条目含 `id`、`theme_id`、`name`、`deleted_at`、`slot_count`、`bytes`、`status`、`error` | 回收站条目 ID 与主题 ID 分开；`status` = `ok` / `damaged`；限额由后端返回，前端不硬编码 |
-| `DeleteOutcome` / `RestoreOutcome` / `EmptyOutcome` | `auto_purged`、`warning`；`removed`、`failed` | 删除结果如实带回「自动清理了几套」「原目录残留」；清空时单个失败不影响其余 |
+| `DeleteOutcome` / `RestoreOutcome` / `EmptyOutcome` | `auto_purged`、`warning`；`theme_id`、`warning`；`removed`、`failed` | 删除结果如实带回「自动清理了几套」「原目录残留」；恢复结果带 `theme_id`（副本恢复 = 新 UUID，决策 54），旧后端缺省由前端按原 ID 兜底；清空时单个失败不影响其余 |
 | `BatchDeleteOutcome` / `BatchDeleteFailure` | `deleted[]`、`failed[]`（`theme_id` / `error`）、`auto_purged`、`warning` | `delete_themes` 的返回值（决策 43）；部分成功：单套失败只进 `failed`，成功项按入参去重后的顺序返回 |
 | `SaveCurrentOutcome` | `theme`、`warnings`、`file_count`、`applied`、`recent`、`warning` | 保存当前光标的结果；`applied = false` 表示只保存未接管（槽位没抄全 / 应用失败），原因在 `warning` |
 
@@ -259,7 +259,7 @@ App.tsx
 
 **删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → 回读 `theme.json` 与注册表，拒绝系统方案和正在使用的主题 → 整个目录移入 `trash\<条目 UUID>\` 并写 `.trash.json` 快照 → 超出 20 套 / 512 MB 时按删除时间自动清理最早条目。跨盘（`ERROR_NOT_SAME_DEVICE`）走「复制 → 校验文件数与字节数 → 删源」，复制失败清理半成品、源保持原样。
 
-**回收站**（决策 26）：入口在「设置 → 数据 → 回收站」子页。`list_trash` 只扫 `trash` 一级 UUID 目录，快照或 `theme.json` 无法恢复的条目标 `damaged` 并保留可见；`restore_from_trash` 重新校验快照、`theme.json` 与目标目录（不能已有同 ID 主题），恢复后落到**当前**主题目录并删除快照；`delete_from_trash` / `empty_trash` 才真正删文件。回收站不参与主题列表、备份、最近使用与主题目录迁移，删除成功后的 toast 说明去处与自动清理。
+**回收站**（决策 26）：入口在「设置 → 数据 → 回收站」子页。`list_trash` 只扫 `trash` 一级 UUID 目录，快照或 `theme.json` 无法恢复的条目标 `damaged` 并保留可见；`restore_from_trash` 重新校验快照、`theme.json` 与目标目录（不能已有同 ID 主题），恢复后落到**当前**主题目录并删除快照；`asCopy = true` 时目标被占改为**恢复为副本**（决策 54）：新 UUID 落盘、`theme.json` 的 id 与目录名同步改写、名称加「（副本）」，复制失败清理半成品、条目原样保留；`delete_from_trash` / `empty_trash` 才真正删文件。回收站不参与主题列表、备份、最近使用与主题目录迁移，删除成功后的 toast 说明去处与自动清理。
 
 ---
 
@@ -334,3 +334,6 @@ App.tsx
 | 2026-10-30 | 决策 42：从文件恢复先看内容——「从文件恢复」选中外部备份后打开备份内容弹窗（复用任意路径的 `list_backup_themes`，决策 34 预留的复用点落地），看完选单套恢复（对外部备份解禁）或经「整包合并恢复…」转既有合并确认框；合并语义不变；命令数保持 39；`backup_content_check.mjs` 增补转交断言（25 项） |
 | 2026-10-30 | 决策 43：主题库批量整理——新增 `delete_themes`（命令契约 39 → 40）与 `BatchDeleteOutcome` / `BatchDeleteFailure`；逐套复用单套删除校验与回收站链路，去重、部分成功、一把 `ops` 锁、`delete-progress`、有成功项才刷新托盘；「我的主题」新增整理模式（逐行 / 全选三态复选框、使用中禁选、搜索变更清空勾选、确认框点名、批量删除进度），验收 `scripts/batch_check.mjs` |
 | 2026-10-30 | 文档校正：CI 实际为五道闸（2026-10-29 增补 `clippy -D warnings`）；`export_all_themes` / `get_storage_stats` / `clear_history` 的决策引用由 34 改为 35；§2 目录与 §3 只读例外按当前代码更新 |
+| 2026-11-01 | 决策 53：应用次数统计——`get_all_themes` 顺带从事件流派生 `apply_counts`（命令数保持 41），「我的主题」加「应用次数」列与「按应用次数」排序；顺手修正决策 48 并列排序实现（同数按导入时间新在前）；验收并入 `mine_view_check.mjs`（17 项） |
+| 2026-11-01 | 决策 54：回收站恢复为副本——`restore_from_trash` 增加可选 `asCopy`，目标 ID 被占时分配新 UUID 复制落盘（id / 目录名 / 名称「（副本）」同步改写），`RestoreOutcome` 补 `theme_id`；普通恢复拒绝语义不变；命令数保持 41，验收 `scripts/trash_copy_check.mjs` |
+| 2026-11-01 | 决策 55：定时轮换主题——`settings.json` 新增 `rotate_enabled` / `rotate_interval_minutes`（默认关 / 60，后端校验 15–1440），前端新增 `lib/theme-rotate.ts`（纯函数拆 `theme-rotate-core.ts`），间隔定时器触发、优先级最低（定时切换或跟随系统开启时让位，还原默认挂起）；命令数保持 41，验收 `scripts/rotate_check.mjs` |

@@ -21,6 +21,7 @@ import { initAutoSwitch } from "@/lib/auto-switch";
 import { initAutoBackup } from "@/lib/auto-backup";
 import { initCursorGuard } from "@/lib/cursor-guard";
 import { initScheduleSwitch } from "@/lib/schedule-switch";
+import { initThemeRotate } from "@/lib/theme-rotate";
 import { initShortcuts } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { checkForUpdates } from "@/lib/update-check";
@@ -72,6 +73,10 @@ function App() {
   // 定时切换主题（「设置 → 通用」可配，默认关闭）：时间段内外应用配对主题，
   // 边界用 setTimeout 到点评估、不轮询；见 lib/schedule-switch.ts（决策 33）
   useEffect(() => initScheduleSwitch(), []);
+
+  // 定时轮换主题（「设置 → 通用」可配，默认关闭）：按间隔在「我的主题」里
+  // 循环应用，是优先级最低的自动行为（前两者开启时让位）；见 lib/theme-rotate.ts（决策 55）
+  useEffect(() => initThemeRotate(), []);
 
   // 光标守护（「设置 → 通用」可配，默认关闭）：启动检查 + 聚焦发现外部改写后
   // 自动恢复上次使用的主题；不轮询，见 lib/cursor-guard.ts

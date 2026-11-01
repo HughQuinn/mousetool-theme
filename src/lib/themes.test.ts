@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   appliedAtMachine,
+  applyCountOf,
   buildRecentItems,
   mineThemes,
   missingSlotNames,
@@ -77,6 +78,36 @@ test("mineThemes 按槽位完整度排序，同数保持新在前", () => {
   const wide = theme({ id: "wide", name: "Wide", updated_at: "2026-10-29 09:00", cursors: NEON.cursors.concat(NEON.cursors[0]) });
   const rows = mineThemes([PAPER, NEON, wide], "", { sort: "slots" });
   assert.deepEqual(rows.map((t) => t.id), ["wide", "neon", "paper"]);
+});
+
+test("mineThemes 按应用次数降序，没记录的垫底（决策 53）", () => {
+  const third = theme({ id: "third", name: "Third", updated_at: "2026-10-27 09:00" });
+  const counts = { neon: 3, paper: 1 };
+  // 常用的在前：neon(3) > paper(1) > third(无记录)
+  assert.deepEqual(
+    mineThemes([third, PAPER, NEON], "", { sort: "usage", applyCounts: counts }).map((t) => t.id),
+    ["neon", "paper", "third"],
+    "无记录按 0 计，排在最后",
+  );
+  // 同数按导入时间新在前
+  const tie = { neon: 1, paper: 1 };
+  assert.deepEqual(
+    mineThemes([PAPER, NEON], "", { sort: "usage", applyCounts: tie }).map((t) => t.id),
+    ["neon", "paper"],
+  );
+  // 没给次数表时不炸，等价于全部零次
+  assert.deepEqual(
+    mineThemes([PAPER, NEON], "", { sort: "usage" }).map((t) => t.id),
+    ["neon", "paper"],
+  );
+});
+
+test("applyCountOf 没记录与零次都算「没记录」（决策 53）", () => {
+  const counts = { neon: 3, zero: 0 };
+  assert.equal(applyCountOf(counts, "neon"), 3);
+  assert.equal(applyCountOf(counts, "zero"), null, "0 次显示「—」而不是「0 次」");
+  assert.equal(applyCountOf(counts, "missing"), null);
+  assert.equal(applyCountOf(undefined, "neon"), null, "旧后端没有这份表时不炸");
 });
 
 test("mineThemes 筛选缺文件的与从未使用的", () => {

@@ -56,6 +56,17 @@ export interface ThemeFileGap {
   slots: string[];
 }
 
+/**
+ * 一套主题在事件流里的应用次数（决策 53）
+ *
+ * 事件流上限 200 条：这是「最近 200 次以内」的口径，不是历史总数，
+ * 界面要照实说。已删除的主题不在列表里，后端多给的条目自然用不上。
+ */
+export interface ThemeApplyCount {
+  theme_id: string;
+  count: number;
+}
+
 /** 与 Rust 端 `models::ThemesResult` 字段一一对应 */
 export interface ThemesResult {
   /** 能读到的主题（系统方案 + 用户主题），部分来源失败时仍返回其余部分 */
@@ -81,6 +92,12 @@ export interface ThemesResult {
    * 只列有缺口的主题；「前端旧、Rust 新」的组合里可能是 undefined，读时兜底 `?? []`。
    */
   file_gaps: ThemeFileGap[];
+  /**
+   * 各主题在事件流里的应用次数（决策 53）
+   *
+   * 「前端旧、Rust 新」的组合里可能是 undefined，读时兜底 `?? []`。
+   */
+  apply_counts: ThemeApplyCount[];
 }
 
 /** 与 Rust 端 `models::ActiveState` 字段一一对应（`get_active_state`） */
@@ -153,6 +170,11 @@ export interface BatchDeleteOutcome {
 
 /** `restore_from_trash` 的返回值 */
 export interface RestoreOutcome {
+  /**
+   * 恢复后的主题 ID：普通恢复 = 原主题 ID；恢复为副本（决策 54）= 新分配的
+   * UUID。旧后端不给这个字段，读时兜底 `?? entry.theme_id`
+   */
+  theme_id: string | null;
   warning: string | null;
 }
 

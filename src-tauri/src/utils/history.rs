@@ -199,6 +199,21 @@ pub fn recent_from_events(events: &[HistoryEntry]) -> Vec<HistoryEntry> {
         .collect()
 }
 
+/// 「最近 N 次里各主题被应用的次数」（决策 53）
+///
+/// 事件流不去重，数它就是次数；界面上被删掉的主题自然对不上号，
+/// 由前端按现有主题取用。`BTreeMap` 保证返回顺序稳定（按 theme_id）。
+pub fn counts_from_events(events: &[HistoryEntry]) -> Vec<(String, usize)> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for entry in events {
+        *counts.entry(entry.theme_id.as_str()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(theme_id, count)| (theme_id.to_string(), count))
+        .collect()
+}
+
 /// 记一次「使用了这个主题」：事件流追加一条，返回派生后的最近主题
 pub fn record_to(path: &Path, theme: &CursorTheme) -> Result<Vec<HistoryEntry>, String> {
     let read = read_events_from(path);
@@ -256,6 +271,16 @@ pub fn read_history() -> (Vec<HistoryEntry>, Vec<String>) {
     };
     let read = read_events_from(&path);
     (recent_from_events(&read.events), read.warnings)
+}
+
+/// 默认位置的**原始事件流** + 警告（决策 53 的次数派生要用没去重的流）
+pub fn read_events() -> (Vec<HistoryEntry>, Vec<String>) {
+    let path = match paths::history_file() {
+        Ok(path) => path,
+        Err(err) => return (Vec::new(), vec![err]),
+    };
+    let read = read_events_from(&path);
+    (read.events, read.warnings)
 }
 
 /// 解析备份包里的 `history.json`（v1 / v2 都认），返回事件流
@@ -545,6 +570,29 @@ mod tests {
 
         let future = r#"{"version":99,"events":[]}"#;
         assert!(parse_events(future).unwrap_err().contains("不认识"));
+    }
+
+    #[test]
+    fn 次数统计按事件流逐条计并保持顺序稳定() {
+        let events = vec![
+            event("b", "2026-10-25 12:00"),
+            event("a", "2026-10-25 11:00"),
+            event("b", "2026-10-24 09:00"),
+            event("c", "2026-10-23 08:00"),
+            event("b", "2026-10-22 07:00"),
+        ];
+
+        let counts = counts_from_events(&events);
+        // BTreeMap 按 theme_id 排序，顺序稳定（前端按需查表，不依赖出现顺序）
+        assert_eq!(
+            counts,
+            vec![
+                ("a".to_string(), 1),
+                ("b".to_string(), 3),
+                ("c".to_string(), 1),
+            ]
+        );
+        assert_eq!(counts_from_events(&[]), Vec::new(), "空事件流 = 零次");
     }
 
     #[test]
