@@ -136,7 +136,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 
 ## 检查脚本逐条说明
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` / `context_menu_check` / `keyboard_nav_check` 走交互链路。各脚本的验收内容：
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` / `context_menu_check` / `keyboard_nav_check` / `palette_check` 走交互链路。各脚本的验收内容：
 
 - `nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 - `mine_view_check` 验收「我的主题」排序与筛选（决策 48 + 决策 53）：默认顺序不变 → 应用次数列与事件流口径一致、没记录显示「—」→ 注入一套最早/最小名/最少槽位的主题后各排序（含按应用次数）各自生效 → 从未使用筛选命中 → 计数标注 → 整理模式下控件让位 → 缺口筛选空态与恢复 → `?mock-broken-files=1` 缺口筛选命中带提示行 → 无 JS 异常。
@@ -158,6 +158,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `duplicate_check` 验收主题去重诊断（决策 38）：诊断中心六项齐全 → 默认「没有内容重复的主题」→ 重扫不变 → `?mock-duplicates=1` 摘要「1 组内容重复」+ 注意徽标 → 详情点名成员与可省字节 → 无 JS 异常。
 - `context_menu_check` 验收右键菜单（决策 65）：图库卡右键出菜单四项齐全 → 点「应用」生效且徽标出现 → 使用中主题无应用项、删除禁用并说明 → 系统方案只有应用 / 导出 → Esc 关闭 → 「重命名」让检查器进编辑态、「删除」开确认框 → 「我的主题」行右键同样可用 → 无 JS 异常。
 - `keyboard_nav_check` 验收图库方向键导航（决策 66）：←→ 移一张 / ↑↓ 移一行（列数实测）/ Home / End 首尾与越界钳制 / 跨段连续漫游 / 聚焦卡片激活即选中 → 无 JS 异常。
+- `palette_check` 验收 Ctrl+K 快速切换面板（决策 67）：Ctrl+K 拉起 / 再按关闭 / 候选排序（我的主题在前、使用中置顶、还原动作为末行）/ 输入即过滤 / ↑↓ 高亮 / Enter 应用并关面板 / 动作行还原默认 / Esc 关闭 / 快捷键开关关闭后失效 → 无 JS 异常（独立 profile：末段关开关会持久化）。
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 

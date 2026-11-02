@@ -14,6 +14,7 @@ import { RecentView } from "@/components/views/RecentView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { ImportCenterDialog } from "@/components/import/ImportCenterDialog";
 import { Toaster } from "@/components/ui/toaster";
+import { QuickSwitcher } from "@/components/layout/QuickSwitcher";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
@@ -157,6 +158,7 @@ function App() {
       </div>
       <DropOverlay active={dragActive} />
       <ImportCenterDialog />
+      <QuickSwitcher />
       <Toaster />
     </>
   );

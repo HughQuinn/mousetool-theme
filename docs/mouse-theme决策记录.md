@@ -72,6 +72,7 @@
 | 64 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（39 项）+ 真机 `verify_flip_shift.mjs` |
 | 65 | 主题卡 / 表格行右键菜单 | 图库卡与「我的主题」行右键出菜单：应用 / 导出 ZIP / 重命名（仅用户主题）/ 删除（仅用户主题，使用中禁用并说明；系统方案只有应用与导出）。**重命名与删除不直接执行**——先选中该主题再发 `mousetool:request-*` 事件，由检查器里已有的编辑框与确认框接手（确认与后果说明只有一份）；组件是 base-ui ContextMenu 自封装（`ui/context-menu.tsx`，浮层动效口径）；不做键盘入口（检查器已有完整键盘路径，右键菜单是鼠标快捷方式） |
 | 66 | 图库网格方向键导航 | 图库页 ←→ 移一张、↑↓ 移一行、Home/End 首尾，跨「系统方案 / 我的主题」两段连续漫游；**Tab 语义不动**（仍逐卡穿越，不做 roving tabindex）——方向键是二维移动的增强，不是替换；列数按第一行卡片实测（auto-fill 布局随窗宽变），不写死。断言进 `keyboard_nav_check.mjs`（14 项），真机冒烟用 CDP Input 域发真实按键验证 |
+| 67 | Ctrl+K 快速切换面板 | 应用内浮层：输入即过滤全部主题（我的主题在前名称序、系统方案在后、使用中置顶），↑↓ 高亮、Enter 直接应用、Esc 关；底部常驻「还原系统默认光标」动作行。快捷键注册进 `SHORTCUTS`（受 `shortcuts_enabled` 开关管辖）；候选过滤是纯函数 `lib/quick-switch.ts`（可单测）；面板是任务层浮层不进 PAGE_META/VIEWS；**应用失败只 toast、不在面板里确认**——面板只负责选 |
 
 ---
 
@@ -1262,6 +1263,17 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **Tab 语义不动**：卡片保持原生 button 逐卡 Tab 穿越，**不做 roving tabindex**——方向键是二维移动的增强，与 Tab 是两套并存的入口（WAI-ARIA 对非 grid 角色的卡片列表，这是改动最小、语义最稳的口径；真正的 grid pattern 需要引入 `role=grid/row/gridcell` 结构重构，收益不成比例）。
 - **激活**：Enter / Space 走 button 原生点击选中进检查器，零新代码。
 - **验收口径**：`keyboard_nav_check.mjs`（14/14）——移动 / 越界 / 列数实测 / 跨段 / 激活选中；合成 KeyboardEvent 触发不了 button 的原生 Enter 点击，脚本里激活断言走 `activeElement.click()`（同一条选中链路）；真机 `verify_ui_smoke.mjs` 用 CDP Input 域发**真实按键**验证焦点移动。
+
+---
+
+## 决策 67：Ctrl+K 快速切换面板
+
+**结论**（2026-11-03）：任何页面按 Ctrl+K 拉起快速切换面板（再按一次或 Esc 关闭）：输入即过滤全部主题（系统方案 + 我的主题），↑↓ 移动高亮、Enter **直接应用**并关面板；底部常驻「还原系统默认光标」动作行。这是托盘快速切换（决策 30）的应用内等价物——「挑一个 → 应用」的核心动作从四五步缩到两步。
+
+- **排序口径**：使用中置顶（带徽标）→ 我的主题（名称序）→ 系统方案（名称序）——面板的任务是「切」，自己导入的主题是主要目标。过滤为纯函数 `lib/quick-switch.ts`（决策 49 口径，`npm test` 覆盖）。
+- **注册与开关**：Ctrl+K 进 `SHORTCUTS` 清单（设置 → 快捷键一览自动展示），受 `shortcuts_enabled` 开关管辖，与其它快捷键同权；开着再按是 toggle。
+- **不做确认**：Enter 应用无二次确认——应用主题本身可逆（还原默认 / 换别的），与检查器「应用此主题」按钮同权限；失败由 toast 报，面板不背错误处理。
+- **验收边界**：`palette_check.mjs`（12/12，独立 profile——脚本末段关闭快捷键开关会持久化，共用固定 profile 会让下一轮从「已禁用」起步）；真机 `verify_ui_smoke.mjs` 用真实 Ctrl 按键拉起面板并 Esc 关闭，**不按 Enter**（会写真实注册表）。
 
 ---
 

@@ -104,6 +104,36 @@ try {
     `${nav} → ${afterKey}`,
   );
 
+  // Ctrl+K 快速切换面板（决策 67）：真实按键拉起、输入框就位、Esc 关闭。
+  // **不按 Enter**——那会真的应用主题写注册表
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown", key: "k", code: "KeyK", windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "k", code: "KeyK", windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const palette = await cdp.evaluate(
+    `JSON.stringify({
+      open: Boolean(document.querySelector('[data-slot="quick-switcher"]')),
+      inputFocused: document.activeElement?.getAttribute("data-quick-switch-input") !== undefined,
+      options: document.querySelectorAll('[role="option"]').length,
+    })`,
+  );
+  await cdp.evaluate(
+    `document.querySelector("[data-quick-switch-input]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }))`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const paletteClosed = await cdp.evaluate(
+    `!document.querySelector('[data-slot="quick-switcher"]')`,
+  );
+  const paletteState = JSON.parse(palette);
+  checker.check(
+    "Ctrl+K 拉起面板且 Esc 关闭（不真应用）",
+    paletteState.open === true && paletteState.options >= 1 && paletteClosed,
+    palette,
+  );
+
   const errors = cdp.pageErrors;
   checker.check("真机窗口无 JS 异常", errors.length === 0, errors.join(" | "));
 
