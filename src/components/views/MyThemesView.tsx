@@ -478,7 +478,8 @@ export function MyThemesView() {
                         </span>
                       </span>
                       {isActive && (
-                        <span className="z-10 shrink-0">
+                        // 入场淡入（决策 63）：同图库卡，应用成功的瞬间不闪变
+                        <span className="enter-fade z-10 shrink-0">
                           <StatusBadge tone="success" dot>
                             使用中
                           </StatusBadge>

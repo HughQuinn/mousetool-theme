@@ -33,9 +33,14 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
   const restoring = Boolean(busy[actionBusyKey("restore", "default")]);
   const saving = Boolean(busy[actionBusyKey("save", "current")]);
 
+  // 三态标识（决策 24）：态翻转时重播一次入场淡入（决策 63），
+  // 让「当前使用中 → 系统默认」这类切换读起来是内容变了，不是文字闪一下。
+  // key 只含态不含主题 id——改名不该触发重播。
+  const stateKey = activeTheme ? "active" : activeExternal ? "external" : "default";
+
   return (
     <div className="rounded-xl bg-sidebar-accent/60 p-2.5 ring-1 ring-sidebar-border">
-      <div className="flex items-center gap-1.5">
+      <div key={stateKey} className="enter-fade flex items-center gap-1.5">
         <span
           aria-hidden
           className={
@@ -51,7 +56,10 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
         </span>
       </div>
 
-      <div className={variant === "compact" ? "mt-1.5 flex items-center gap-2" : "mt-2 flex items-center gap-2"}>
+      <div
+        key={`${stateKey}-body`}
+        className={`enter-fade ${variant === "compact" ? "mt-1.5 flex items-center gap-2" : "mt-2 flex items-center gap-2"}`}
+      >
         <span className="preview-surface grid size-8 shrink-0 place-items-center rounded-md ring-1 ring-border/60">
           {cover ? (
             <CursorPreviewImage slot={cover} size="sm" />
@@ -79,7 +87,7 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
             <Button
               variant="outline"
               size="xs"
-              className="w-full justify-start"
+              className="enter-fade w-full justify-start"
               onClick={saveCurrentTheme}
               disabled={saving || restoring}
               aria-busy={saving}

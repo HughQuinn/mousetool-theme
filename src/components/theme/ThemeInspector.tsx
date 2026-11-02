@@ -111,7 +111,8 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               <h2 className="flex min-w-0 items-center gap-1.5">
                 <ThemeNameField theme={theme} nameClassName="text-base font-medium" />
                 {isActive && (
-                  <span className="shrink-0">
+                  // 入场淡入（决策 63）：同图库卡
+                  <span className="enter-fade shrink-0">
                     <StatusBadge tone="success" dot>
                       使用中
                     </StatusBadge>

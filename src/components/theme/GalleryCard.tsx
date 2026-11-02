@@ -45,7 +45,8 @@ export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardPr
           <MousePointer2 className="size-5 text-muted-foreground" />
         )}
         {active && (
-          <span className="absolute top-2 right-2">
+          // 入场淡入（决策 63）：应用成功的瞬间徽标从无到有，瞬变会闪一下眼
+          <span className="enter-fade absolute top-2 right-2">
             <StatusBadge tone="success" dot>
               使用中
             </StatusBadge>

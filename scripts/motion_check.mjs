@@ -427,6 +427,32 @@ try {
   );
   check("主题卡过渡用的是标准曲线", (controls.card?.easing ?? "").includes("cubic-bezier(0.2, 0, 0, 1)"), controls.card?.easing);
 
+  // ── 6. 状态徽标入场淡入（决策 63）──
+  const badge = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const store = globalThis.__themeStore.getState();
+      const target = store.themes.find((t) => t.id !== store.activeThemeId);
+      if (!target) return JSON.stringify({ error: "no-target" });
+      await globalThis.__themeStore.getState().applyTheme(target.id);
+      await sleep(40);
+      const card = document.querySelector('[data-theme-card="' + target.id + '"]');
+      const badge = card?.querySelector(".enter-fade") ?? null;
+      const anim = badge?.getAnimations()[0] ?? null;
+      const name = anim?.animationName ?? "";
+      const duration = anim?.effect?.getTiming?.().duration ?? 0;
+      // 还原默认：侧栏「当前使用」卡三态翻转，重挂的状态行也要带入场淡入
+      await globalThis.__themeStore.getState().restoreDefault();
+      await sleep(60);
+      const row = [...document.querySelectorAll("span")].find((s) => s.textContent === "系统默认");
+      const rowAnimated = Boolean(row?.closest(".enter-fade"));
+      return JSON.stringify({ badgeFound: Boolean(badge), name, duration, rowAnimated });
+    })()`),
+  );
+  check("应用后「使用中」徽标带入场淡入", badge.badgeFound === true, JSON.stringify(badge));
+  check("徽标动画是 enter-fade 且 180ms", badge.name === "enter-fade" && near(badge.duration / 1000, 0.18), `${badge.name} ${badge.duration}ms`);
+  check("侧栏当前使用卡三态翻转重播入场", badge.rowAnimated === true);
+
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
 
   ws.close();
