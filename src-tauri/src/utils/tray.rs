@@ -1,8 +1,10 @@
-//! 托盘图标：只在「关闭行为 = 最小化到托盘」时存在
+//! 托盘图标：按关闭行为与主窗口可见状态决定有无
 //!
 //! 关窗不退而是缩到托盘时，必须有个东西能把窗口叫回来，也得有个明确的
 //! 「退出」出口——两件事都由托盘菜单承担（单击图标 = 打开主界面）。
 //! 关闭行为切回「直接退出」时托盘随之移除，不留一个悬空图标。
+//! 「每次询问」（决策 57）下托盘只在主窗口隐藏期间存在：关窗询问里选了
+//! 「这次先缩到托盘」，也得有图标能叫回来；窗口回到前台后图标摘除。
 //!
 //! 托盘还承担「快速切换」（决策 30）：右键菜单里放最近使用的主题与
 //! 「还原默认光标」，不开窗就能换光标。菜单数据在重建时读取、动作完成后
@@ -85,26 +87,34 @@ pub(crate) fn plan_theme_actions(
     actions
 }
 
-/// 按当前设置同步托盘的有无（启动时调一次，设置变更后再调一次）
+/// 按当前设置与主窗口可见状态同步托盘的有无（启动、设置变更、藏窗 / 还原后调）
+///
+/// 托盘何时需要存在：关闭行为是「最小化到托盘」时常驻；「每次询问」时只在
+/// 主窗口隐藏期间存在（决策 57）；「直接退出」从不需要。
 ///
 /// 创建失败只记日志：托盘是「关闭到托盘」的配套件，创建不上不代表应用
 /// 不能用——此时关窗仍按设置隐藏，用户可以从开始菜单再打开。
 pub fn sync(app: &AppHandle) {
-    match settings::read().close_behavior {
-        CloseBehavior::Tray => {
-            if app.tray_by_id(TRAY_ID).is_none() {
-                if let Err(err) = build(app) {
-                    log::error("tray", &format!("创建托盘图标失败：{err}"));
-                }
+    let needed = match settings::read().close_behavior {
+        CloseBehavior::Tray => true,
+        // 启动路径里主窗口可能还没建出来（None）：一律按不藏窗算，别凭空造托盘
+        CloseBehavior::Ask => app
+            .get_webview_window("main")
+            .is_some_and(|window| !window.is_visible().unwrap_or(true)),
+        CloseBehavior::Exit => false,
+    };
+    if needed {
+        if app.tray_by_id(TRAY_ID).is_none() {
+            if let Err(err) = build(app) {
+                log::error("tray", &format!("创建托盘图标失败：{err}"));
             }
-            // 主题区随后台重查补齐：启动与设置变更都会走到这里，
-            // 初建菜单只含「打开 / 退出」，不在启动路径里做注册表与磁盘 I/O
-            refresh(app);
         }
-        CloseBehavior::Exit => {
-            // 返回的图标被立刻丢弃 = 移除，正是想要的
-            let _ = app.remove_tray_by_id(TRAY_ID);
-        }
+        // 主题区随后台重查补齐：启动与设置变更都会走到这里，
+        // 初建菜单只含「打开 / 退出」，不在启动路径里做注册表与磁盘 I/O
+        refresh(app);
+    } else {
+        // 返回的图标被立刻丢弃 = 移除，正是想要的
+        let _ = app.remove_tray_by_id(TRAY_ID);
     }
 }
 
@@ -274,6 +284,12 @@ pub fn show_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+    // 「每次询问」下托盘只在藏窗期间存在：窗口回来了，图标使命完成。
+    // 放后台线程跑，不在托盘自己的事件回调里动托盘
+    if settings::read().close_behavior == CloseBehavior::Ask {
+        let handle = app.clone();
+        std::thread::spawn(move || sync(&handle));
     }
 }
 

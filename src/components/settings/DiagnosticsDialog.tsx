@@ -219,9 +219,13 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
         severity: settingsError ? "error" : autostartError || !autostart ? "warning" : "ok",
         summary: settingsError
           ? "读取失败"
-          : `关闭行为：${settings?.close_behavior === "tray" ? "最小化到托盘" : "直接退出"} · 自启动：${
-              autostart ? (autostart.enabled ? "已开启" : "未开启") : "未读到"
-            }`,
+          : `关闭行为：${
+              settings?.close_behavior === "tray"
+                ? "最小化到托盘"
+                : settings?.close_behavior === "ask"
+                  ? "每次询问"
+                  : "直接退出"
+            } · 自启动：${autostart ? (autostart.enabled ? "已开启" : "未开启") : "未读到"}`,
         evidence: [settingsError ?? autostartError ?? "settings.json 与自启动注册表读取正常"],
         advice: settingsError
           ? "重启应用通常可以恢复（典型原因：前端新、Rust 旧）"

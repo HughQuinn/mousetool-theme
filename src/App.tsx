@@ -13,6 +13,7 @@ import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { ImportCenterDialog } from "@/components/import/ImportCenterDialog";
+import { CloseAskDialog } from "@/components/layout/CloseAskDialog";
 import { Toaster } from "@/components/ui/toaster";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
@@ -157,6 +158,8 @@ function App() {
       </div>
       <DropOverlay active={dragActive} />
       <ImportCenterDialog />
+      {/* 关窗询问（决策 57）：Rust 拦下关窗后发事件，弹窗让用户选去留 */}
+      <CloseAskDialog />
       <Toaster />
     </>
   );

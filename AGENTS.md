@@ -5,7 +5,7 @@
 > 原则：**事实以代码为准**。本文件与代码不一致时改本文件，不要改代码迁就文档；更不要把没实现的东西写成已支持。
 
 **技术栈**：Tauri 2 + React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand 5 + Rust。
-**现状**：功能已跑通，41 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
+**现状**：功能已跑通，43 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
 
 ## 先读哪份（冲突时从上往下取）
 
@@ -29,8 +29,8 @@
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码，不转 GIF。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **日志**（`utils/log.rs`）：数据根 `logs\mousetool.log`，512KB 轮转连当前共 3 份，写失败一律静默；非测试代码禁止 `eprintln!`。
-- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；托盘最近主题快速切换（决策 30）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
-- **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
+- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；关闭行为三态——ask（每次询问，新装默认）/ tray / exit，关窗拦截在 Rust：tray 藏窗、ask 发 `close-ask` 事件由前端 `CloseAskDialog` 弹询问框（决策 57）；托盘存在规则：tray 常驻、ask 藏窗期间、exit 从不（决策 30 的最近主题快速切换照旧）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
+- **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量；二次启动唤回隐藏窗走命名事件（第二实例 `SetEvent` 即退，首实例守护线程在主线程执行 show；跨进程 ShowWindow 会静默失效，真机实证，决策 57）。
 - **Integration**（`models/` ↔ `types/`）：前后端字段逐个同名 `snake_case`，不做驼峰转换。
 - **安装器**（`src-tauri/installer/` + `tauri.conf.json` 的 `bundle` 段）：NSIS 整窗自绘模板；坑位密集（`SetCtlColors` 字面量、`;` 逐行写、BOM、makensis 工作目录等），**动它之前先读手册「安装器」一节**。
 
@@ -60,13 +60,14 @@
 **① 槽位 15 个，顺序固定**
 唯一来源 `utils/registry.rs::SLOT_DEFS`，完整表见决策记录「决策 3」。键名别照系统设置里的显示名猜：是 `Crosshair`（不是 Cross），另有 `NWPen`、`UpArrow`。短名（`no` / `ns` / `we` / `up`）只能做**精确匹配**，放进包含匹配会撞 `normal`、`upload`。
 
-**② 41 个 Tauri 命令**
+**② 43 个 Tauri 命令**
 完整清单与契约见架构设计 §5 表格，逐条易错点见手册；最容易记错的：
 - 没有 `list_themes`（是 `get_all_themes`）；没有 `create_custom_theme`（未实现）。
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，只给 ID 拿不到它的文件。
 - `get_active_state` 是聚焦用的轻量重查（决策 24）：不取 `ops` 锁；失败直接 `Err`，前端静默保留旧状态。
 - `delete_theme` 是**软删除**（决策 26）；`delete_from_trash` / `empty_trash` 才真正删文件。
 - `update_settings` 是**补丁语义**；`import_backup` 是合并恢复不覆盖已有；`restore_theme_from_backup` 只追加一套主题。
+- `hide_window_to_tray` / `exit_app` 只服务关窗询问（决策 57）：前者藏窗 + 按需补托盘，后者结束进程；`close-ask` 事件在 Rust 关窗拦截里发、页面没就绪会丢。
 - 除纯路径计算的 `get_data_dir` 外，所有命令 `async` + `spawn_blocking`；重操作取 `ops::try_begin` 锁（第二个重操作**立刻失败**，不要改成排队），只读命令不取锁。
 
 **③ 注册表写入范围**
@@ -138,7 +139,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 界面/动效脚本跑在浏览器里、走 mock，不写系统光标；**必须与 dev server 同一条命令**（各脚本验收内容见手册）：
 
 ```powershell
-node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/trash_copy_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/rotate_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/dev_bg.mjs stop
+node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/trash_copy_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/rotate_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/close_ask_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`），数据根指向临时目录，不备份 / 还原用户设置。

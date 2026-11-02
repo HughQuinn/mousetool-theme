@@ -22,6 +22,7 @@
 | `verify_batch_delete.mjs` | 决策 43：真实 Tauri IPC 与真实回收站下导入两套主题 → `delete_themes`（重复 ID + 非法 ID）→ 主题库清空、回收站两条正常 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_import_duplicate.mjs` | 决策 47：同内容包二次导入 `duplicate_of` 点名 + warnings 人话版、不拦截；内容不同不误报 | 脚本自造（复制 `C:WindowsCursorsaero_arrow.cur`） |
 | `verify_iterate_features.mjs` | 决策 53/54/55：`apply_counts` 按事件流真机派生并上窗口（手写隔离事件流，不碰注册表）；`restore_from_trash` 的 `asCopy` 新 UUID 落盘 + `theme.json` 改写 +「（副本）」、同 ID 冲突时普通恢复仍拒绝；轮换设置真机落盘、越界拒绝、设置卡渲染。**全程不调 `apply_theme`**（真机注册表不隔离，改了就是用户的真实光标） | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` + 手写 v2 `history.json`、按原 ID 重建同 ID 主题） |
+| `verify_close_ask.mjs` | 决策 57：真实 WM_CLOSE（user32 直投主窗口句柄）下的关窗拦截——ask 弹询问框、取消不动设置、不勾选一次性藏窗且 settings.json 不落盘、勾选后 tray / exit 真实落盘、`exit_app` 进程自行结束、exit 模式跨重启直接退；二次启动唤回隐藏窗。可见性判据必须 EnumWindows 按标题 + `IsWindowVisible`（`.NET` 的 `MainWindowHandle` 会抓到 WebView2 宿主的无标题可见窗口，全程误报） | 无需造输入（WM_CLOSE 由脚本注入） |
 | `verify_cursor_size.mjs` | 决策 51：光标大小注册表路线的真机验证——`CursorBaseSize` / `AccessibilityCursorSize` 写入 + SPI 后实测光标位图不缩放，**假设被证伪**（退出码 1 = 假设未证实，本身是有效结论） | 无需造输入（reg.exe + PowerShell 直测，整键备份 + 逐值还原） |
 
 三个脚本都会：启动隔离应用 → CDP 直连 `__TAURI_INTERNALS__.invoke` 断言 →
@@ -37,7 +38,9 @@ node scripts/real_machine/verify_themepack.mjs
 node scripts/real_machine/verify_batch_delete.mjs
 node scripts/real_machine/verify_import_duplicate.mjs
 node scripts/real_machine/verify_iterate_features.mjs
+node scripts/real_machine/verify_close_ask.mjs
 npm run dev:bg stop
 ```
 
-退出码 0 = 全过。截图落在 `%TEMP%\rm_verify*.png`（不入库）。
+退出码 0 = 全过。截图落在 `%TEMP%\cs-rm-shots\`（不入库；留档的证据截图由人工
+筛选后复制进 `docs/real-machine-verify/`）。
