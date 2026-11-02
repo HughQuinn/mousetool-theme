@@ -1252,7 +1252,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **全局委托而非逐组件挂载**：`installPressWater()`（App 挂一份）document 捕获 pointerdown，`closest('button.motion-press')` 命中才动。原因：侧栏导航等处是 `buttonVariants()` 类串配原生 `<button>`（要塞活动条等自定义结构），逐组件挂会漏——类名即行为标记，凡 `motion-press` 就有水滴，未来变体自动获得。
 - **性能与可访问性**：涟漪与晃动都是一次性 WAAPI 补间（与 Toast FLIP 同级，非常驻逐帧 JS）；`prefers-reduced-motion` 下 JS 侧直接跳过（缩放反馈仍由 CSS transition 提供，瞬时完成）；晃动用独立 `scale` 属性不碰 `transform`（不覆盖按下位移的 translate）；键盘激活不出水滴（没有坐标）。
 - **不做**：开关滑块/对勾的水珠晃动（开关要利落）；内容卡片（维持决策 59）。
-- **验收**：`motion_check.mjs` 47/47——新增 4 项（真实鼠标按下荡开涟漪、500ms 后移除、晃动过冲 >1.01 且峰值后下穿再回 1、减少动态下不产生涟漪）；`npm run build` 通过。
+- **验收**：`motion_check.mjs` 47/47——新增 4 项（真实鼠标按下荡开涟漪、500ms 后移除、晃动过冲 >1.01 且峰值后下穿再回 1、减少动态下不产生涟漪）；`npm run build` 通过。真机 `verify_spring_motion.mjs` 18/18（2026-11-03，真实 WebView2 + 隔离数据根，晃动过冲 1.0194、涟漪 500ms 清理、减少动态不产涟漪；证据见 `docs/real-machine-verify/决策60真机验证.md`）。
 
 ---
 
