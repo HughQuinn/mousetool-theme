@@ -5,6 +5,7 @@ import {
   appliedAtMachine,
   applyCountOf,
   buildRecentItems,
+  mineBatchSelection,
   mineThemes,
   missingSlotNames,
   missingSlotsOf,
@@ -157,4 +158,37 @@ test("appliedAtMachine 转成 <time> 可用的格式", () => {
   assert.equal(appliedAtMachine("2026-10-30 09:12"), "2026-10-30T09:12");
   assert.equal(appliedAtMachine("2026-10-30 09:12:30"), "2026-10-30T09:12:30");
   assert.equal(appliedAtMachine("怪格式"), "怪格式");
+});
+
+test("mineBatchSelection：使用中不可勾、勾选范围等于眼前列表", () => {
+  const rows = [theme({ id: "a", name: "A" }), theme({ id: "b", name: "B" }), theme({ id: "c", name: "C" })];
+
+  // 空勾选：没有全选、没有半选
+  let result = mineBatchSelection(rows, null, new Set());
+  assert.equal(result.deletableRows.length, 3);
+  assert.equal(result.selectedThemes.length, 0);
+  assert.equal(result.allSelected, false);
+  assert.equal(result.someSelected, false);
+
+  // 部分勾选 = 半选
+  result = mineBatchSelection(rows, null, new Set(["a"]));
+  assert.deepEqual(result.selectedThemes.map((t) => t.id), ["a"]);
+  assert.equal(result.someSelected, true);
+
+  // 全勾 = 全选；使用中的主题（active）从可勾集合里剔除
+  result = mineBatchSelection(rows, "b", new Set(["a", "c"]));
+  assert.deepEqual(result.deletableRows.map((t) => t.id), ["a", "c"]);
+  assert.equal(result.allSelected, true);
+  assert.equal(result.someSelected, false);
+
+  // 勾了已被使用中的主题（例如应用后残留）：不算数，不进提交目标
+  result = mineBatchSelection(rows, "a", new Set(["a", "b"]));
+  assert.deepEqual(result.selectedThemes.map((t) => t.id), ["b"]);
+  assert.equal(result.allSelected, false);
+});
+
+test("mineBatchSelection：空列表永远不出现「全选」", () => {
+  const result = mineBatchSelection([], null, new Set());
+  assert.equal(result.allSelected, false);
+  assert.equal(result.someSelected, false);
 });

@@ -115,6 +115,34 @@ export function missingSlotNames(theme: CursorTheme, slots: string[]): string[] 
   );
 }
 
+/** 整理模式的派生数据（决策 43 / 62）：勾选口径只有这一个来源 */
+export interface MineBatchSelection {
+  /** 眼前可勾选的行（使用中的主题不进批量操作） */
+  deletableRows: CursorTheme[];
+  /** 已勾选且仍可勾选的主题——「删除所选 / 导出所选」的提交目标 */
+  selectedThemes: CursorTheme[];
+  allSelected: boolean;
+  someSelected: boolean;
+}
+
+/**
+ * 批量整理的勾选派生（纯函数）
+ *
+ * 从 MyThemesView 抽出（v0.5.0 重构）：勾选范围永远等于眼前列表，
+ * 使用中的行不可进勾选——这两条口径在这里集中可测，组件只消费结果。
+ */
+export function mineBatchSelection(
+  rows: CursorTheme[],
+  activeThemeId: string | null,
+  selectedIds: ReadonlySet<string>,
+): MineBatchSelection {
+  const deletableRows = rows.filter((theme) => theme.id !== activeThemeId);
+  const selectedThemes = deletableRows.filter((theme) => selectedIds.has(theme.id));
+  const allSelected = deletableRows.length > 0 && selectedThemes.length === deletableRows.length;
+  const someSelected = selectedThemes.length > 0 && !allSelected;
+  return { deletableRows, selectedThemes, allSelected, someSelected };
+}
+
 /**
  * 某主题在事件流里的应用次数（决策 53）；没有记录返回 null（界面显示「—」）
  *

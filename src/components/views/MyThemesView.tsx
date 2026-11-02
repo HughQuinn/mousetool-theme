@@ -27,6 +27,7 @@ import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
 import {
   applyCountOf,
+  mineBatchSelection,
   mineThemes,
   missingSlotsOf,
   type MineFilter,
@@ -94,18 +95,12 @@ export function MyThemesView() {
     [themes],
   );
   const batchDeleting = Boolean(busy[BATCH_DELETE_BUSY_KEY]);
-  // 使用中的主题可以看、可以选进检查器，但不能进入批量删除
-  const deletableRows = useMemo(
-    () => rows.filter((theme) => theme.id !== activeThemeId),
-    [rows, activeThemeId],
-  );
-  const selectedThemes = useMemo(
-    () => rows.filter((theme) => selectedIds.has(theme.id) && theme.id !== activeThemeId),
-    [rows, selectedIds, activeThemeId],
+  // 整理模式的勾选派生（决策 43/62 口径集中在 lib/themes.mineBatchSelection，可单测）
+  const { deletableRows, selectedThemes, allSelected, someSelected } = useMemo(
+    () => mineBatchSelection(rows, activeThemeId, selectedIds),
+    [rows, activeThemeId, selectedIds],
   );
   const selectedCount = selectedThemes.length;
-  const allSelected = deletableRows.length > 0 && selectedCount === deletableRows.length;
-  const someSelected = selectedCount > 0 && !allSelected;
 
   // 删除范围永远与眼前列表一致：换搜索词就清空勾选，避免删掉被过滤掉的行
   useEffect(() => {
