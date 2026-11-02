@@ -61,6 +61,7 @@
 | **Badge** | — | — | 颜色 120ms（只跟随状态色，不承载主操作） |
 | **列表：骨架 → 内容** | 整体淡入 180ms（`enter-fade`） | — | — |
 | **状态徽标（使用中）与「当前使用」卡三态** | 状态出现 / 三态翻转时入场淡入 180ms（`enter-fade`，key 重挂触发，决策 63） | **退场保持瞬变**（见「不做」表） | — |
+| **表格行 FLIP 让位**（我的主题 删除 / 筛选 / 排序） | — | — | 行数或行序变化时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，决策 64）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量） |
 | **视图切换**（图库 / 我的主题 / 最近使用） | 内容区整体淡入 180ms（`enter-fade`），不做位移与缩放 | — | — |
 | **设置分组切换**（通用 / 快捷键 / 数据 / 系统集成 / 关于） | 内容区整体淡入 180ms（`enter-fade`，`key=分组` 触发重挂），与换页同一套口径 | — | — |
 | **检查器换选中项** | 整体淡入 180ms（`enter-fade`，`key=主题 ID` 触发重挂） | — | — |
@@ -188,6 +189,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-03 | 表格行 FLIP 让位：删除 / 筛选 / 排序后保留行滑动补位 180ms（`useFlipRows`，决策 64）；`motion_check` 增至 39 项断言，真机 `verify_flip_shift.mjs` 5/5 |
 | 2026-11-03 | 状态徽标（使用中 ×3 处）与「当前使用」卡三态：入场淡入 180ms、退场保持瞬变（决策 63）；`motion_check` 增至 36 项断言 |
 | 2026-11-03 | `AniPlayer` 停表条件扩到失焦（决策 60）：`blur`/`focus` 事件驱动，事件判初值不用 `hasFocus()`（自动化环境恒 false）；真机 `verify_ani_blur.mjs` 6/6 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |

@@ -26,6 +26,7 @@
 | `verify_theme_meta.mjs` | 决策 61：`rename_theme` 的名称 + 描述补丁语义在真实 IPC 下可用——改名+描述一起生效、磁盘 `theme.json` 落盘、只改描述时名称与导入时间不动、空串清除、省略参数补丁语义、超长拒绝、列表重读一致 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_export_selected.mjs` | 决策 62：`export_all_themes` 传 ID 清单只导那套（真实 zip 落盘核验）、未知 ID 落空不报错、省略清单全量导出（重名加序号兜底顺带覆盖） | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` × 2） |
 | `verify_ui_smoke.mjs` | 纯前端改动的真机冒烟：真实 WebView2 窗口里三栏骨架 / 图库卡片 / 侧栏三态卡正常渲染、无 JS 异常。**全程不碰注册表**（不调 apply / restore）——动效与交互断言的主战场在浏览器 mock 链，这里只证明真实窗口里也成立 | 无需造输入 |
+| `verify_flip_shift.mjs` | 决策 64：真实窗口里删除「我的主题」行后，保留行有 180ms 标准曲线的 WAAPI FLIP 补间并真的滑动补位；删除走真实 IPC、隔离数据根，不碰注册表 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` × 2） |
 | `verify_cursor_size.mjs` | 决策 51：光标大小注册表路线的真机验证——`CursorBaseSize` / `AccessibilityCursorSize` 写入 + SPI 后实测光标位图不缩放，**假设被证伪**（退出码 1 = 假设未证实，本身是有效结论） | 无需造输入（reg.exe + PowerShell 直测，整键备份 + 逐值还原） |
 
 三个脚本都会：启动隔离应用 → CDP 直连 `__TAURI_INTERNALS__.invoke` 断言 →
@@ -45,6 +46,7 @@ node scripts/real_machine/verify_ani_blur.mjs
 node scripts/real_machine/verify_theme_meta.mjs
 node scripts/real_machine/verify_export_selected.mjs
 node scripts/real_machine/verify_ui_smoke.mjs
+node scripts/real_machine/verify_flip_shift.mjs
 npm run dev:bg stop
 ```
 

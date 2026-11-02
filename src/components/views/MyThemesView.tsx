@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   FolderDown,
@@ -21,6 +21,7 @@ import { BatchDeleteDialog } from "@/components/theme/BatchDeleteDialog";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
+import { useFlipRows } from "@/hooks/useFlipRows";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
 import {
@@ -73,6 +74,8 @@ export function MyThemesView() {
   const [sort, setSort] = useState<MineSort>("newest");
   const [filter, setFilter] = useState<MineFilter>("all");
 
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
+
   // 「从未使用」= 最近使用记录里没出现过的主题 ID
   const usedIds = useMemo(
     () => new Set(recent.map((entry) => entry.theme_id)),
@@ -83,6 +86,8 @@ export function MyThemesView() {
     () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds, applyCounts }),
     [themes, query, sort, filter, fileGaps, usedIds, applyCounts],
   );
+  // 行数或行序变化（删除 / 筛选 / 排序 / 导入）时，保留行滑动补位（决策 64）
+  useFlipRows(tbodyRef, "[data-theme-row]", [rows]);
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
     [themes],
@@ -403,7 +408,7 @@ export function MyThemesView() {
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={tbodyRef}>
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
@@ -422,6 +427,7 @@ export function MyThemesView() {
               <tr
                 key={theme.id}
                 data-theme-row={theme.id}
+                data-flip-key={theme.id}
                 className={cn(
                   "border-b border-border/60 transition-[background-color] duration-(--motion-fast) ease-standard",
                   selected ? "bg-accent" : "hover:bg-muted/50",

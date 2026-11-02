@@ -69,6 +69,7 @@
 | 61 | 主题描述可编辑 | `rename_theme` 增加可选 `newDescription`（补丁语义：`None` 不动 / 空串清除 / 有值替换），描述 ≤200 字禁控制字符；检查器头部原地编辑（与重命名同一套 Enter/Esc/失焦约定），底部脚注不再重复描述；系统方案描述来自注册表、不提供编辑；`updated_at` 不动 |
 | 62 | 批量整理「导出所选」 | `export_all_themes` 增加可选 `themeIds`：传清单只导清单内的用户主题、未知 ID 落空不报错，省略 = 全部；「导出所选」长在整理模式工具条（删除所选旁），与「导出全部」共用命令、`export:all` 忙碌键、ops 锁与部分成功语义——清理前先留底的工作流，不加新命令（命令数保持 43） |
 | 63 | 状态徽标 / 状态卡入场过渡 | 「使用中」徽标（图库卡 / 表格行 / 检查器）与侧栏「当前使用」卡三态：出现或翻转时入场淡入 180ms（复用 `enter-fade`，key 重挂触发）；**退场保持瞬变**——徽标是内联标记不是浮层，退场动画要保留 DOM + pointer-events 处理，复杂度与收益不成比；动画断言进 `motion_check`（36 项），真机只跑 UI 冒烟（徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界） |
+| 64 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（39 项）+ 真机 `verify_flip_shift.mjs` |
 
 ---
 
@@ -1227,6 +1228,17 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **动机**：应用主题成功的一瞬间徽标从无到有，之前是硬切——深浅两版下视觉权重最大的 success 色块闪现，读起来像渲染抖动；「当前使用」卡三态同理，文字与状态点一起瞬变。
 - **实现口径**：key 只含**态**不含主题 id——改名、换选中不触发重播；「保存并应用」按钮（外部改写态条件渲染）同规则。
 - **验收边界**：动效断言在 `motion_check`（第 6 段，mock 里 applyTheme / restoreDefault 不碰真实系统）；真机只跑 `verify_ui_smoke.mjs` 冒烟——徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界（决策 53/54/55 同例）。
+
+---
+
+## 决策 64：表格行 FLIP 让位
+
+**结论**（2026-11-03）：「我的主题」的行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，仍然存在的行从旧位置**滑动**到新位置（180ms、`ease-standard`），不再瞬移补位。实现是独立 hook `src/hooks/useFlipRows.ts`：`useLayoutEffect` 里量新位置、与旧快照求差、WAAPI 补 transform——与 Toast 堆叠让位（toaster 的 `useStackShift`）同一套 FLIP 手法。
+
+- **与 toaster 的关键差异**：这里量位置用 `offsetTop` 而不是 `getBoundingClientRect()`——transform 不参与布局，offsetTop 永远是"最终位置"，上一轮动画播到一半也不会污染测量，因此**不需要补间前 cancel**（toaster 量的是含 transform 的视口位置，才有"量到动画中间态"的坑）。
+- **减少动态**：WAAPI 动画不受全局 CSS 压缩时长的影响（motion.md §5 的既定口径），必须在 JS 侧 `matchMedia` 判定后直接跳过创建。
+- **真机证据**：`scripts/real_machine/verify_flip_shift.mjs`（5/5）——隔离数据根导入两套、真实 IPC 批量删除、捕获 WAAPI 补间 180ms 标准曲线、保留行上移 56.5px 补位。
+- **边界**：只对 `data-flip-key` 存在的行补间（新导入的行没有旧位置，直接出现，不与"预览图入场动画不做"冲突）。
 
 ---
 

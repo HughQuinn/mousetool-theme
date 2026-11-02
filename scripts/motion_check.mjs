@@ -453,6 +453,43 @@ try {
   check("徽标动画是 enter-fade 且 180ms", badge.name === "enter-fade" && near(badge.duration / 1000, 0.18), `${badge.name} ${badge.duration}ms`);
   check("侧栏当前使用卡三态翻转重播入场", badge.rowAnimated === true);
 
+  // ── 7. 表格行 FLIP 让位（决策 64）──
+  const mineFlip = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const store = globalThis.__themeStore.getState();
+      store.setCurrentPage("mine");
+      await sleep(250);
+      const tbody = document.querySelector("tbody");
+      const rows = [...tbody.querySelectorAll("[data-theme-row]")];
+      if (rows.length < 2) return JSON.stringify({ error: "rows<2" });
+      const victim = rows[0].getAttribute("data-theme-row");
+      const before = rows[1].getBoundingClientRect().top;
+      await store.deleteThemes([victim]);
+      // 轮询动画窗口（180ms）：保留行应带着 transform 补间滑上来
+      let anim = null;
+      for (let i = 0; i < 12; i++) {
+        const row = [...tbody.querySelectorAll("[data-theme-row]")]
+          .find((r) => r.getAttribute("data-theme-row") !== victim);
+        anim = row?.getAnimations().find((a) => a.animationName === undefined) ?? null;
+        if (anim) break;
+        await sleep(20);
+      }
+      const name = anim?.animationName ?? "WAAPI-transform";
+      const isWAAPI = anim !== null && anim.constructor.name === "Animation";
+      const duration = anim?.effect?.getTiming?.().duration ?? 0;
+      const easing = anim?.effect?.getTiming?.().easing ?? "";
+      await sleep(250);
+      const after = [...tbody.querySelectorAll("[data-theme-row]")]
+        .find((r) => r.getAttribute("data-theme-row") !== victim)
+        ?.getBoundingClientRect().top ?? 0;
+      return JSON.stringify({ isWAAPI, duration, easing, moved: before - after, name });
+    })()`),
+  );
+  check("删除后保留行有 FLIP 补间动画", mineFlip.isWAAPI === true, JSON.stringify(mineFlip));
+  check("FLIP 时长 180ms、标准曲线", near(mineFlip.duration / 1000, 0.18) && (mineFlip.easing ?? "").includes("cubic-bezier(0.2, 0, 0, 1)"), `${mineFlip.duration}ms ${mineFlip.easing}`);
+  check("保留行真的滑动了位置", mineFlip.moved > 0, `上移 ${mineFlip.moved?.toFixed?.(1)}px`);
+
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
 
   ws.close();
