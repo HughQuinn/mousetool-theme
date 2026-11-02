@@ -241,6 +241,24 @@
   animation: enter-fade var(--motion-base) var(--ease-standard) both;
 }
 
+/* 开屏遮罩的 logo 入场：缩放 0.96→1 + 淡入，与浮层入场同档。
+   遮罩停留多久不是动效、是启动编排（最短 800ms / 就绪即走 / 5s 兜底），
+   由 SplashOverlay 的计时器管——--motion-* 四档管的是"过渡手感"，不是"等多久" */
+@keyframes splash-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@utility splash-in {
+  animation: splash-in var(--motion-slow) var(--ease-standard) both;
+}
+
 /* Toast 倒计时条：贴卡片底边的 scaleX 由 1 缩到 0，条长就是"剩余寿命"。
    两处刻意偏离"只写 --motion-* / ease-standard"硬规则，因为它是**读数**不是装饰：
    1. 时长是数据（等于该条 toast 的 timeout，3.2–6s），由组件用 animation-duration 内联注入 —— 同 FLIP 的 JS 侧补间；

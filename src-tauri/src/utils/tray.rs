@@ -27,6 +27,17 @@ use crate::utils::settings::{self, CloseBehavior};
 const TRAY_ID: &str = "main";
 const TOOLTIP: &str = "鼠标主题工具";
 
+/// 主窗口是否至少显示过一次。主窗在 `tauri.conf.json` 里是 `visible: false`
+/// 起步、由开屏遮罩挂载后唤醒（splash-ready）：「ask 藏窗期间才有托盘」里的
+/// 「藏」指用户把已露面的窗口收起来，启动期的等待显示不算——不区分的话
+/// 每次启动都会闪出一个随即消失的托盘图标
+static EVER_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 主窗口是否至少显示过一次（`sync` 的 ask 判定与启动兜底线程用）
+pub fn ever_shown() -> bool {
+    EVER_SHOWN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 const RESTORE_DEFAULT_ID: &str = "restore-default";
 const APPLY_PREFIX: &str = "apply:";
 /// 菜单里最近主题的上限：托盘是快捷入口，全量挑选回主界面做
@@ -97,10 +108,15 @@ pub(crate) fn plan_theme_actions(
 pub fn sync(app: &AppHandle) {
     let needed = match settings::read().close_behavior {
         CloseBehavior::Tray => true,
-        // 启动路径里主窗口可能还没建出来（None）：一律按不藏窗算，别凭空造托盘
-        CloseBehavior::Ask => app
-            .get_webview_window("main")
-            .is_some_and(|window| !window.is_visible().unwrap_or(true)),
+        // 启动路径里主窗口可能还没建出来（None）：一律按不藏窗算，别凭空造托盘。
+        // 窗口 `visible: false` 起步同理—— ever_shown() 为假说明还没露过面，
+        // 不算「藏窗期间」
+        CloseBehavior::Ask => {
+            ever_shown()
+                && app
+                    .get_webview_window("main")
+                    .is_some_and(|window| !window.is_visible().unwrap_or(true))
+        }
         CloseBehavior::Exit => false,
     };
     if needed {
@@ -280,6 +296,7 @@ fn restore_default_from_tray(app: &AppHandle) {
 
 /// 把主窗口叫回前台（托盘菜单 / 托盘单击共用）
 pub fn show_window(app: &AppHandle) {
+    EVER_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

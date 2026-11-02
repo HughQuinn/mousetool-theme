@@ -51,6 +51,7 @@
 
 | 组件 | 进入 | 退出 | 状态切换 |
 |---|---|---|---|
+| **开屏遮罩 SplashOverlay（决策 58）** | 整层即现盖满窗口，logo 缩放 0.96→1 + 淡入 240ms（`splash-in`）；「停留多久」是启动编排不是动效（最短 800ms / 减少动态 0 / 兜底 5s，组件计时器管） | 数据就绪整层淡出 240ms ease-exit，`transitionend` 后卸载 | — |
 | **Toast** | 下方 8px 起、缩放 0.96→1、淡入，240ms，原点在右下 | 下沉 4px、缩到 0.98、淡出，160ms | 堆叠让位 180ms（FLIP）；关闭按钮悬停 120ms；倒计时条随剩余寿命 linear 缩短，悬停/失焦与计时器同挂起（§2 例外） |
 | **AlertDialog 遮罩** | 淡入 180ms | 淡出 160ms | — |
 | **AlertDialog 弹窗** | 缩放 0.96→1 + 淡入，240ms，中心原点 | 缩回 0.96 + 淡出，160ms | — |
@@ -185,6 +186,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-02 | 开屏遮罩（决策 58）：logo 入场 `splash-in` 与整层退场全走既有四档 token，无新档位、无例外；「停留时长是启动编排不是动效」的口径记入 §3 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |
 | 2026-10-24 | Toast 倒计时条：贴卡片底边 scaleX 1→0（时长=超时、linear —— §2 唯一例外）；挂起与 base-ui 计时器同进退（data-expanded + 窗口焦点镜像）；`motion_check` 增至 33 项断言 |
 | 2026-10-21 | 建立。四档时长（fast/base/slow/exit）、两条曲线；Toast 与 Dialog 补齐进入/退出；Toast 堆叠 FLIP；`transition-all` 清零；新增 `motion_check.mjs`（28 项断言） |

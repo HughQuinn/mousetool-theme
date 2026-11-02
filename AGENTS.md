@@ -21,7 +21,7 @@
 
 ## 职责边界（同一仓库，不是独立进程；明细见手册）
 
-- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。提示口径：toast 只报事件不报状态——设置开关成功静默、注册表类操作成功也弹（决策 56）。
+- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器 + 启动开屏遮罩（`SplashOverlay`，仅 `inTauri` 渲染，浏览器 mock 不渲染，决策 58）；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。提示口径：toast 只报事件不报状态——设置开关成功静默、注册表类操作成功也弹（决策 56）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排；错误一律 `Result<T, String>` 且是**用户能照着行动**的中文；I/O 全走 `spawn_blocking`，重操作取 `utils/ops.rs` 锁并发 `*-progress` 事件；入参先过 `utils/validation.rs`，归档读取只走 `utils/limits.rs`。
 - **Theme**（`utils/importer.rs` 等）：zip / `.themepack` / `.theme` / 文件夹四入口一条导入链路；`.inf` 说明书映射优先于文件名推断；导出 zip 附带通用 `.inf`；`theme.json` 磁盘存相对路径、运行时 `resolve_theme` 拼绝对；存储目录迁移与文件完整性体检见手册。
 - **Trash**（`utils/trash.rs`）：删除即软删除进 `trash\<条目 UUID>\`（条目 ID 与主题 ID 分开）；上限 20 套 / 512 MB，超限自动清最早；恢复遇同 ID 被占可改「存为副本」（新 UUID、名称加「（副本）」，决策 54）。
@@ -29,7 +29,7 @@
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码，不转 GIF。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **日志**（`utils/log.rs`）：数据根 `logs\mousetool.log`，512KB 轮转连当前共 3 份，写失败一律静默；非测试代码禁止 `eprintln!`。
-- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；关闭行为三态——ask（每次询问，新装默认）/ tray / exit，关窗拦截在 Rust：tray 藏窗、ask 发 `close-ask` 事件由前端 `CloseAskDialog` 弹询问框（决策 57）；托盘存在规则：tray 常驻、ask 藏窗期间、exit 从不（决策 30 的最近主题快速切换照旧）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
+- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；关闭行为三态——ask（每次询问，新装默认）/ tray / exit，关窗拦截在 Rust：tray 藏窗、ask 发 `close-ask` 事件由前端 `CloseAskDialog` 弹询问框（决策 57）；托盘存在规则：tray 常驻、ask 藏窗期间、exit 从不（决策 30 的最近主题快速切换照旧），「藏窗期间」从窗口露面后起算（`EVER_SHOWN`，启动期等待显示不算，决策 58）；主窗 `visible: false` 起步，开屏遮罩挂载发 `splash-ready` 事件、Rust 统一走 `tray::show_window` 亮窗 + 10s 兜底强制显示（决策 58）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
 - **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量；二次启动唤回隐藏窗走命名事件（第二实例 `SetEvent` 即退，首实例守护线程在主线程执行 show；跨进程 ShowWindow 会静默失效，真机实证，决策 57）。
 - **Integration**（`models/` ↔ `types/`）：前后端字段逐个同名 `snake_case`，不做驼峰转换。
 - **安装器**（`src-tauri/installer/` + `tauri.conf.json` 的 `bundle` 段）：NSIS 整窗自绘模板；坑位密集（`SetCtlColors` 字面量、`;` 逐行写、BOM、makensis 工作目录等），**动它之前先读手册「安装器」一节**。
@@ -106,6 +106,7 @@
 27. 保存当前光标是**复制**：只读注册表当前值、复制到新的主题目录并写相对路径，不改系统光标目录、不写 `Schemes`；有槽位没抄全时不得自动应用（否则会把没抄到的非空槽位写成空字符串）（决策 28）。
 28. 光标守护只事件驱动：默认关闭；启动检查要等设置与主题列表就绪且注册表读取成功；运行期只处理 `active_external`，不抢已知主题与系统默认；目标必须仍在主题库里；复用 `applyTheme`，不轮询注册表、不写 `Schemes`、不做后台服务（决策 29）。
 29. 备份单主题恢复只做追加：目标 ID 已存在必须拒绝且不碰原目录；只解压请求的那套主题，不合并使用记录、不改设置；失败清理本次新建目录；旧绝对路径必须按主题 id / 文件名映射后再落相对路径；部分缺文件恢复后必须把缺口写进 `warnings`，全部槽位缺文件必须拒绝（决策 34）。
+30. 主窗 `visible: false` 起步（`tauri.conf.json`），由 `SplashOverlay` 挂载时发的 `splash-ready` 事件唤醒、Rust 统一走 `tray::show_window` 显示——别把 `visible` 改回 `true`（先白窗后遮罩的空档会回来），别绕开 `show_window` 另写显示（ask 托盘判定依赖它置 `EVER_SHOWN`），`lib.rs` 的 10s 兜底强制显示不能删（前端起不来时不能无窗）（决策 58）。
 
 ---
 

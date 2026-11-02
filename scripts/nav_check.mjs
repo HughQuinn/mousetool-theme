@@ -81,7 +81,17 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Page.navigate", { url: "http://localhost:1420" });
-  await sleep(3000);
+  // 等应用真正可交互（导航渲染出来）再开始断言：dev server 冷启动时首次
+  // 模块变换要数秒（实测 FCP 3.4s+），固定等待会撞上「页面还没挂载完」的竞态
+  let navReady = false;
+  for (let i = 0; i < 60; i++) {
+    if ((await evaluate(`document.querySelectorAll("nav button").length > 0`)) === true) {
+      navReady = true;
+      break;
+    }
+    await sleep(500);
+  }
+  if (!navReady) console.log("  ⚠ 30s 内导航未渲染，继续按原流程断言");
   mkdirSync(SHOT_DIR, { recursive: true });
 
   // 每页的结构签名：标题、中间区域长什么样、右侧有没有检查器

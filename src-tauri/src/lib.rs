@@ -21,7 +21,7 @@ use commands::theme::{
     restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use utils::log;
 use utils::settings::{self, CloseBehavior};
 use utils::{integration, tray};
@@ -43,6 +43,24 @@ pub fn run() {
             // 二次启动唤回隐藏窗的信号由这个线程接收（integration::handle_launch
             // 在首实例分支创建了事件），显示动作派回主线程执行
             integration::spawn_show_waiter(app.handle().clone());
+            // 主窗 `visible: false` 起步（tauri.conf.json）：等开屏遮罩挂载好
+            // （前端发 splash-ready）再显示——用户看到的第一帧就是完整的开屏，
+            // 没有先白窗后遮罩的空档。显示统一走 tray::show_window，
+            // ask 模式下托盘的有无随之重算
+            let handle = app.handle().clone();
+            app.listen("splash-ready", move |_| {
+                tray::show_window(&handle);
+            });
+            // 兜底：前端起不来（dev 时 vite 挂了、JS 崩了）也不能让用户
+            // 对着一台没有窗口的进程；正常启动约 1s 内就会收到 splash-ready
+            let fallback = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if !tray::ever_shown() {
+                    log::warn("app", "前端 10 秒未就绪（未收到 splash-ready），兜底显示主窗口");
+                    tray::show_window(&fallback);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

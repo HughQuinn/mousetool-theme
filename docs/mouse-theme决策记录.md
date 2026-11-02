@@ -66,6 +66,7 @@
 | 55 | 定时轮换主题 | 按固定间隔在「我的主题」里循环应用下一套；前端 `setTimeout` 链到点触发；**优先级最低的自动行为**——定时切换或跟随系统任一开启时让位，手动还原默认后挂起到下一周期；默认关闭 |
 | 56 | 提示层口径：toast 报事件不报状态 | 设置开关（patchSettings 系）成功静默、失败弹「设置失败」；状态反馈交给开关自身与卡片状态行；写注册表的操作（自启动/右键菜单）成功也弹；自动行为只在真干活/失败时弹且用 silent 防双弹；不给开关统一加成功回执 |
 | 57 | 关闭行为三态与关窗询问 | `close_behavior` 扩为 ask（每次询问，**新装默认**）/ tray / exit；ask 下 Rust 拦关窗发 `close-ask` 事件、前端弹询问框（缩到托盘 / 退出 / 取消 + 「不再询问」，勾选后本次选择落盘）；托盘在 ask 模式藏窗期间存在；命令数 41→43（`hide_window_to_tray` / `exit_app`） |
+| 58 | 启动开屏与主窗延迟显示 | 单窗口 CSS 遮罩（`SplashOverlay`）：数据就绪淡出、最短停留 800ms / 最长 5s 兜底、`loadError` 也放行；主窗 `visible: false` 起步，遮罩挂载发 `splash-ready` 事件经 `tray::show_window` 亮窗（**零新命令**）；ask 托盘判定加 `EVER_SHOWN`（启动期等待不算藏窗）；真机白屏 dev 冷启动 3.8s→50ms、release 951→42ms |
 
 ---
 
@@ -1203,6 +1204,27 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 58：启动开屏——单窗口遮罩 + 主窗延迟显示
+
+**结论**（2026-11-02）：启动时显示品牌开屏遮罩（`SplashOverlay`：favicon logo + 应用名居中，铺满窗口、`pointer-events-none`、`aria-hidden`），数据就绪后淡出让位；主窗口 `tauri.conf.json` 里 `visible: false` 起步，遮罩挂载即 `emit("splash-ready")`，Rust 收到后统一走 `tray::show_window` 亮窗——**用户看到的第一帧就是完整开屏**，没有「先白窗、后遮罩」的空档。2026-11-02 用户看真机效果后拍板采用。
+
+- **动机**：窗口出现 → WebView 首帧之间是一扇无内容窗口（真机实测 release 827–951ms；dev 冷启动因 Vite 未打包模块瀑布达 3.8s，178 个请求逐个现编译）。深色系统上白窗尤其突兀。开屏把这段变成品牌时刻，主窗延迟显示把「窗口出现」推迟到首帧就绪。
+- **方案取舍**：Tauri 官方的双窗口 splashscreen 模式否决——第二个 WebView 渲染进程（+30–80 MB 常驻内存）、capabilities / 关窗拦截按 label 区分、命令数与文档断言全要动，而本应用启动没有需要掩盖的长活；纯前端遮罩（方案 A）先行落地，白屏残留用主窗延迟显示（方案 C）补齐，A+C 组合即最终形态。窗口级 `backgroundColor` 亦否决——静态一色无法跟系统深浅色。
+- **实现要点**：
+  - 退出条件是「就绪」不是计时：settings 非空且主题首次加载结束（**成功与 `loadError` 都算**——错误态由 `LoadErrorState` 接管，开屏不得变成转圈）。两道保底：最短停留 800ms（数据太快就退会「闪一下」，比没有更难看；`prefers-reduced-motion` 下降为 0、就绪即走）；最长 5s 兜底（设置读取失败时 ready 恒 false 也得放行）。
+  - 动效全走既有 token，无新档位、无 motion.md 例外：logo 入场 `splash-in`（缩放 0.96→1 + 淡入，`--motion-slow` + `ease-standard`）、整层退场 `--motion-slow` + `ease-exit`、`transitionend` 后卸载。「停留多久」是启动编排不是动效，归组件计时器管，不占 `--motion-*`。
+  - **只在 `inTauri` 渲染**：浏览器 mock（26 个检查脚本）完全看不见遮罩，首屏断言不受影响。
+  - `splash-ready` 走事件不走命令：前端 `emit`、Rust `app.listen`，**零新命令**，命令数保持 43；显示统一复用 `tray::show_window`（自带 ask 模式托盘重算）。
+  - `tray::sync` 的 ask 分支加 `EVER_SHOWN`（`show_window` 置位）：「ask 藏窗期间才有托盘」的「藏」指用户收起已露面的窗口，启动期等待显示不算——否则主窗 `visible: false` 会让每次启动闪出一个随即消失的托盘图标。
+  - Rust 10s 兜底线程：未收到 `splash-ready` 就强制亮窗并记日志——前端起不来（dev 时 vite 挂了、JS 崩了）也不能让用户对着一台无窗进程。
+  - dev 体验：vite `server.warmup` 预热 `main.tsx` 模块图，cargo 编译期间并行完成变换（仅 dev 生效）。
+- **实测**（2026-11-02 真机，工具 `scripts/real_machine/_measure_gap.mjs`，进程→窗口→导航→FCP→遮罩五段分解）：用户感知白屏（窗口可见→遮罩可见）dev 冷启动 3802→**50ms**、dev 暖 973→25ms、release 951/827→**42/31ms**；窗口出现时机后移（release 进程→窗口约 0.9–1.1s），期间桌面无窗而非白窗。开屏停留 803–807ms、全程约 1.05s、减少动态下 57–78ms 即走。
+- **边界**：前端彻底加载失败时由 10s 兜底亮出白页（dev 下典型原因是 vite 未起）；F5 重载会重播开屏（生产无重载入口，dev 里重看效果反而方便）；开屏不阻断点击（`pointer-events-none`），就绪前的半成品界面可点但无碍。
+
+**验收**：真机 `scripts/real_machine/verify_splash.mjs` 11/11（2026-11-02，CDP `addScriptToEvaluateOnNewDocument` 注入 rAF 探针 + `Page.reload` 确定性重放，证据见 `docs/real-machine-verify/决策58真机验证.md`）；`verify_close_ask.mjs` 21/21 回归（`visible: false` + `EVER_SHOWN` 后决策 57 语义完好）；26 个浏览器检查脚本全绿；cargo test 249、clippy 零警告、前端单测 32。
+
+---
+
 ## 附录 A：技术栈定格
 
 **Tauri 2 + React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand + Rust**。
@@ -1234,5 +1256,5 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 | 归档大小 | 主题包 50MB / 单文件 20MB / 512 条目 / 8 层；备份 1GiB / 单文件 64MB / 4096 条目 / 10 层。共用 `utils/limits.rs`，流式复制、超限清理（决策 18） |
 | 光标与预览上限 | 光标文件 20MB；预览源文件 8MB，超出直接降级为空预览（决策 18） |
 | `scripts/clean_c_drive.ps1` / `.py` | 与本项目无关的遗留脚本，文档不引用；已于 2026-10-31 移出仓库（决策 44） |
-| 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃） |
+| 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃）；`visible: false` 起步、开屏遮罩挂载后经 `splash-ready` 亮窗（决策 58） |
 | dev server | 前台用 `npm run tauri dev`；后台验证只用 `npm run dev:bg` / `dev:stop`，禁止 `npm run dev \| head` 这类管道启动 |

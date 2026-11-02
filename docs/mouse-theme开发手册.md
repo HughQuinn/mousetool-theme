@@ -54,6 +54,7 @@
 - `settings.json` 存关闭行为/主题目录/开关/自动切换映射/光标守护/自动备份开关与保留份数/定时切换时段与映射/定时轮换开关与间隔（Rust 与前端共用）。
 - **关闭行为三态（决策 57）**：`ask`（每次询问，**新装默认**）/ `tray` / `exit`。拦截在 Rust（`lib.rs` 关窗事件）：tray 藏窗；ask 发 `close-ask` 事件交给前端 `CloseAskDialog`（勾「不再询问」把本次选择经 `update_settings` 落盘，不勾只执行本次）；exit 不拦。页面没就绪时事件会丢、窗口保持打开。
 - 托盘图标的有无由 `tray::sync` 统一判定：tray 模式常驻；**ask 模式只在主窗口隐藏期间存在**（一次性「这次先缩到托盘」靠 `hide_window_to_tray` 藏窗后补图标，`show_window` 叫回窗口后摘除）；exit 从不创建。托盘菜单带最近使用主题快速切换（≤8 + 还原默认勾选，决策 30）：应用 / 还原走 `commands/theme.rs` 的 `apply` / `restore` 同链路，`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单，不轮询；过期条目靠 `apply_by_id` 点击时复核自愈。
+- **启动开屏与主窗延迟显示（决策 58）**：主窗在 `tauri.conf.json` 里 `visible: false` 起步；`SplashOverlay` 挂载即 `emit("splash-ready")`，`lib.rs` setup 里 `app.listen` 收到后统一走 `tray::show_window`（**零新命令**）。遮罩退出条件是「settings 非空且主题首次加载结束」——成功与 `loadError` 都算（错误态由 `LoadErrorState` 接管，开屏不得变成转圈）；最短停留 800ms（减少动态下降为 0、就绪即走）、最长 5s 兜底。Rust 侧 10s 兜底：未收到 `splash-ready` 强制亮窗记日志。`tray::sync` 的 ask 分支因此要求 `EVER_SHOWN`（`show_window` 置位）：启动期等待显示不算「藏窗期间」，否则每次启动闪一个随即消失的托盘图标。遮罩只在 `inTauri` 渲染，浏览器检查脚本看不见；实测白屏（窗口可见→遮罩可见）dev 冷启动 3802→50ms、release 951→42ms（测量工具 `scripts/real_machine/_measure_gap.mjs`）。
 - 自启动写 `HKCU\...\Run`。
 - 外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。
 - 跟随系统深浅色自动切换主题的**切换逻辑在前端** `lib/auto-switch.ts`（决策 25）：主题 ID 补丁用**空串表示清空**（serde_json 分不清 null 与缺省）。
@@ -181,9 +182,16 @@ IPC 下导入两套 → 批量删除（重复 / 非法 ID）→ 主题库清空�
 拒绝、轮换设置的 settings.json 落盘与越界拒绝——**全程不调 `apply_theme`**，
 真机注册表不隔离）、`verify_close_ask.mjs`（决策 57：user32 直投 WM_CLOSE 的
 真实关窗拦截——询问框、不勾选一次性藏窗、勾选落盘 tray / exit、`exit_app`
-进程自行结束、exit 模式跨重启直接退、二次启动唤回隐藏窗）与
+进程自行结束、exit 模式跨重启直接退、二次启动唤回隐藏窗）、
+`verify_splash.mjs`（决策 58：CDP `addScriptToEvaluateOnNewDocument` 注入
+rAF 探针 + `Page.reload` 确定性重放——真实窗口下开屏的出现、最短停留、
+淡出中间态、卸载时数据就绪、减少动态就绪即走、遮罩底色与页面底色一致）与
 `verify_cursor_size.mjs`（决策 51：光标大小注册表假设的真机证伪——唯一不启动
-应用的例外，整键备份还原，退出码 1 = 假设未证实）。
+应用的例外，整键备份还原，退出码 1 = 假设未证实）。另有诊断工具
+`_measure_gap.mjs`（`dev|release` 二选一：拆解启动时间线「进程→窗口→WebView
+导航→首帧→开屏」，连跑冷 / 暖两轮，只打印分段耗时、无断言不进验证链；
+release 模式跑 `--features tauri/custom-protocol` 构建的内嵌 dist，无需 vite）。
 **不进 CI、不入 `AGENTS.md` 验证链**——它们碰真实文件系统，改动导入链路（决策
-15/16/36/39/47 涉及的文件）、批量删除路径（决策 43）或关窗 / 激活链路（决策 57）
-后手动跑一遍。历史证据（截图 + 结论）见 `docs/real-machine-verify/`。
+15/16/36/39/47 涉及的文件）、批量删除路径（决策 43）、关窗 / 激活链路（决策 57）
+或启动 / 开屏链路（决策 58）后手动跑一遍。历史证据（截图 + 结论）见
+`docs/real-machine-verify/`。
