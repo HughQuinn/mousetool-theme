@@ -176,7 +176,9 @@ IPC 下导入两套 → 批量删除（重复 / 非法 ID）→ 主题库清空�
 `verify_iterate_features.mjs`（决策 53/54/55：隔离数据根手写事件流验证
 `apply_counts` 真机派生与窗口展示、`asCopy` 副本恢复的真实落盘与同 ID 冲突
 拒绝、轮换设置的 settings.json 落盘与越界拒绝——**全程不调 `apply_theme`**，
-真机注册表不隔离）与
+真机注册表不隔离）、
+`verify_ani_blur.mjs`（决策 60：真实 OS 焦点迁移下 AniPlayer 失焦停表、
+聚焦续播，只读系统方案预览不碰注册表）与
 `verify_cursor_size.mjs`（决策 51：光标大小注册表假设的真机证伪——唯一不启动
 应用的例外，整键备份还原，退出码 1 = 假设未证实）。
 **不进 CI、不入 `AGENTS.md` 验证链**——它们碰真实文件系统，改动导入链路（决策

@@ -138,6 +138,7 @@ el.animate([{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }
 | 要求 | 做法 |
 |---|---|
 | 尊重系统"减少动态" | `App.css` 全局把 `animation-duration` / `transition-duration` 压到 0.01ms，并清零 `transition-delay`；FLIP 在 JS 侧直接跳过（`matchMedia`）；`.ani` 预览（`AniPlayer`）降级时只画首帧并停止定时器，系统设置切换时实时响应 |
+| 动画不空烧 CPU | `AniPlayer` 停表条件三合一：离屏（IntersectionObserver）/ 窗口不可见（`visibilitychange`）/ **窗口失焦**（`blur`/`focus` 事件，决策 60）——可见但没焦点的后台窗口里没人看动画；停表保留末帧，聚焦续播 |
 | 焦点不能被延迟 | 焦点环走 120ms 档、颜色不透明；不做 `delay` |
 | 无眩晕风险 | 位移 ≤ 8px、无旋转、无视差、无自动循环播放（`animate-pulse` 在降级下只播一轮） |
 | 不阻断操作 | 浮层退场期间 `pointer-events: none`；动画不改变可点区域 |
@@ -185,6 +186,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-03 | `AniPlayer` 停表条件扩到失焦（决策 60）：`blur`/`focus` 事件驱动，事件判初值不用 `hasFocus()`（自动化环境恒 false）；真机 `verify_ani_blur.mjs` 6/6 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |
 | 2026-10-24 | Toast 倒计时条：贴卡片底边 scaleX 1→0（时长=超时、linear —— §2 唯一例外）；挂起与 base-ui 计时器同进退（data-expanded + 窗口焦点镜像）；`motion_check` 增至 33 项断言 |
 | 2026-10-21 | 建立。四档时长（fast/base/slow/exit）、两条曲线；Toast 与 Dialog 补齐进入/退出；Toast 堆叠 FLIP；`transition-all` 清零；新增 `motion_check.mjs`（28 项断言） |
