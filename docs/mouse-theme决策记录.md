@@ -1237,7 +1237,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **token**：`--ease-emphasized`（过冲仅 ~2%）对可见行程太弱，维持定义但不使用；硬规则 ease 家族 +1（`ease-standard/ease-exit/ease-spring`），禁裸数字与 `transition-all` 不变。
 - **不做**：点击涟漪（要 JS 记录坐标逐帧扩散，与「除 Toast FLIP 外全 CSS」冲突，且按钮已有下沉+缩放双层反馈，鼠标桌面端收益低）；Segmented 选中项弹性（颜色过冲观感差）；内容卡片按压弹性（GalleryCard 面积大，scale 显眼，维持 180ms 标准）。
 - **兼容**：`prefers-reduced-motion` 全局兜底自动覆盖新 token（压到 0.01ms，实测断言通过）；无新依赖。
-- **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。
+- **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。真机 `scripts/real_machine/verify_spring_motion.mjs` 14/14（2026-11-03，真实 WebView2 + 隔离数据根，真实鼠标按下/释放采样，数据与 mock 逐项一致；证据见 `docs/real-machine-verify/决策59真机验证.md`）。
 - **环境坑（备查）**：`%TEMP%edge_headless_profile` 残留会让 motion_check 假失败（toast 不卸载、删除按钮轮询不到），删除该目录即恢复；诊断时用独立 profile 的脚本对照定位。
 
 ---
