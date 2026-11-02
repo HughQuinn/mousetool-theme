@@ -36,6 +36,9 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // dev 冷启动预热入口的模块图：cargo 编译的几秒里 Vite 并行完成变换，
+    // WebView 首次导航就不必现编译上百个模块（仅 dev 生效，不影响构建）
+    warmup: { client: ["./src/main.tsx"] },
     hmr: host
       ? {
           protocol: "ws",

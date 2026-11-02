@@ -30,7 +30,7 @@ const MOCK_KEY = "cursorstudio.settings";
 const MOCK_EXE = "C:\\Users\\demo\\App\\Local\\mousetool-theme.exe";
 
 const MOCK_DEFAULT: SettingsSnapshot = {
-  close_behavior: "exit",
+  close_behavior: "ask",
   themes_dir: null,
   effective_themes_dir: "C:\\Users\\demo\\AppData\\Local\\CursorStudio\\themes",
   auto_check_update: true,

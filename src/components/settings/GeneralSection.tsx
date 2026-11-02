@@ -26,8 +26,9 @@ const THEME_MODES = [
 ] as const;
 
 const CLOSE_BEHAVIORS = [
-  { value: "exit", label: "直接退出" },
+  { value: "ask", label: "每次询问" },
   { value: "tray", label: "最小化到托盘" },
+  { value: "exit", label: "直接退出" },
 ] as const;
 
 /**
@@ -432,13 +433,15 @@ export function GeneralSection() {
           title="关闭行为"
           description={
             settings?.close_behavior === "tray"
-              ? "关窗口后程序缩到托盘继续运行；单击托盘图标或右键菜单可回到主界面"
-              : "关窗口即退出程序"
+              ? "关窗口后程序缩到托盘继续运行，定时切换等自动行为不受影响；单击托盘图标或右键菜单可回到主界面"
+              : settings?.close_behavior === "ask"
+                ? "关窗口时弹窗询问：最小化到托盘可让自动行为继续跑，退出应用则全部停止；勾「不再询问」记住这次的选择"
+                : "关窗口即退出程序，定时切换、定时轮换、光标守护等自动行为随之停止"
           }
           action={
             <Segmented
               label="关闭行为"
-              value={settings?.close_behavior ?? "exit"}
+              value={settings?.close_behavior ?? "ask"}
               options={CLOSE_BEHAVIORS.map((item) => ({
                 value: item.value as CloseBehavior,
                 label: item.label,

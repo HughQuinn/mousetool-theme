@@ -52,7 +52,9 @@
 ### 行为设置（`utils/settings.rs` / `tray.rs` / `autostart.rs`）
 
 - `settings.json` 存关闭行为/主题目录/开关/自动切换映射/光标守护/自动备份开关与保留份数/定时切换时段与映射/定时轮换开关与间隔（Rust 与前端共用）。
-- 关闭到托盘时托盘图标动态创建移除，托盘菜单带最近使用主题快速切换（≤8 + 还原默认勾选，决策 30）：应用 / 还原走 `commands/theme.rs` 的 `apply` / `restore` 同链路，`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单，不轮询；过期条目靠 `apply_by_id` 点击时复核自愈。
+- **关闭行为三态（决策 57）**：`ask`（每次询问，**新装默认**）/ `tray` / `exit`。拦截在 Rust（`lib.rs` 关窗事件）：tray 藏窗；ask 发 `close-ask` 事件交给前端 `CloseAskDialog`（勾「不再询问」把本次选择经 `update_settings` 落盘，不勾只执行本次）；exit 不拦。页面没就绪时事件会丢、窗口保持打开。
+- 托盘图标的有无由 `tray::sync` 统一判定：tray 模式常驻；**ask 模式只在主窗口隐藏期间存在**（一次性「这次先缩到托盘」靠 `hide_window_to_tray` 藏窗后补图标，`show_window` 叫回窗口后摘除）；exit 从不创建。托盘菜单带最近使用主题快速切换（≤8 + 还原默认勾选，决策 30）：应用 / 还原走 `commands/theme.rs` 的 `apply` / `restore` 同链路，`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单，不轮询；过期条目靠 `apply_by_id` 点击时复核自愈。
+- **启动开屏与主窗延迟显示（决策 58）**：主窗在 `tauri.conf.json` 里 `visible: false` 起步；`SplashOverlay` 挂载即 `emit("splash-ready")`，`lib.rs` setup 里 `app.listen` 收到后统一走 `tray::show_window`（**零新命令**）。遮罩退出条件是「settings 非空且主题首次加载结束」——成功与 `loadError` 都算（错误态由 `LoadErrorState` 接管，开屏不得变成转圈）；最短停留 800ms（减少动态下降为 0、就绪即走）、最长 5s 兜底。Rust 侧 10s 兜底：未收到 `splash-ready` 强制亮窗记日志。`tray::sync` 的 ask 分支因此要求 `EVER_SHOWN`（`show_window` 置位）：启动期等待显示不算「藏窗期间」，否则每次启动闪一个随即消失的托盘图标。遮罩只在 `inTauri` 渲染，浏览器检查脚本看不见；实测白屏（窗口可见→遮罩可见）dev 冷启动 3802→50ms、release 951→42ms（测量工具 `scripts/real_machine/_measure_gap.mjs`）。
 - 自启动写 `HKCU\...\Run`。
 - 外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。
 - 跟随系统深浅色自动切换主题的**切换逻辑在前端** `lib/auto-switch.ts`（决策 25）：主题 ID 补丁用**空串表示清空**（serde_json 分不清 null 与缺省）。
@@ -63,7 +65,7 @@
 
 ### 系统集成（`utils/integration.rs`）
 
-单实例互斥（`CreateMutexW`）、`--import` 转交（`pending_import.json`，领取即删）、主题文件右键菜单注册（试点，决策 12/41：`.zip` / `.themepack` / `.theme` 三类一把注册，全有或全无，部分注册视为未注册可自愈）。**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
+单实例互斥（`CreateMutexW`）、`--import` 转交（`pending_import.json`，领取即删）、主题文件右键菜单注册（试点，决策 12/41：`.zip` / `.themepack` / `.theme` 三类一把注册，全有或全无，部分注册视为未注册可自愈）。**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。二次启动唤回隐藏窗走**命名事件**（决策 57 真机修复）：第二实例 `SetEvent` 即退，首个实例的守护线程等到后把 `show_window` 派到主线程执行（跨进程 ShowWindow 从别的进程发起会静默失效，真机实证；旧版首个实例没有等待线程时退回 `ShowWindowAsync` 兼容路径）。
 
 ### Integration（`models/` ↔ `types/`、`capabilities/`）
 
@@ -111,7 +113,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 
 ### 命令清单（按类）
 
-主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `delete_themes` / `rename_theme` / `export_theme` / `export_all_themes` / `find_duplicate_themes`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `open_log_dir` / `get_storage_stats` / `clear_history` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `list_backup_themes` / `restore_theme_from_backup` / `verify_backup` / `delete_backup` / `run_auto_backup`。
+主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `delete_themes` / `rename_theme` / `export_theme` / `export_all_themes` / `find_duplicate_themes`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `open_log_dir` / `get_storage_stats` / `clear_history` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import` / `hide_window_to_tray` / `exit_app`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `list_backup_themes` / `restore_theme_from_backup` / `verify_backup` / `delete_backup` / `run_auto_backup`。
 
 ### 逐条易错点
 
@@ -129,6 +131,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `export_all_themes` 批量导出「我的主题」（决策 35）：收 `destDir`（拒绝落进备份 / 回收站 / 主题库），部分成功——单套失败进 `failed` 其余照常落盘；落盘名后端兜底（非法字符 / 保留名 / 重名加序号不覆盖）；取 ops 锁并发 `export-all-progress`。
 - `find_duplicate_themes` 主题内容查重（决策 38）：槽位指纹（键 + 扩展名 + 字节）预分组 → 组内与首套逐字节确认，**只报证实的重复**；缺文件的主题不参与（`skipped_missing` 计数）；只读不取锁；UI 是诊断中心第六项，也是诊断中心**唯一的按需命令**（打开 / 重扫时跑一次、结果只是会话内快照）——其余五项仍全部从 store 派生，别顺手把更多命令塞进诊断。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
+- `hide_window_to_tray` / `exit_app` 只服务关窗询问（决策 57）：前者藏窗 + 按 ask 模式「藏窗期间存在」补托盘（持久化成 tray 模式走 `update_settings`，那边同步托盘，别在命令里重复写设置）；后者直接结束进程，托盘菜单「退出」是 Rust 侧另一条等价路径。`close-ask` 事件由 Rust 关窗拦截发出，无参数、页面未就绪会丢。
 - `update_settings` 是**补丁语义**（只传要改的字段）；关闭行为变更会同步托盘有无；轮换间隔收 `rotateIntervalMinutes`（15–1440，越界中文报错，决策 55）。`preview_themes_dir` 只校验与统计、不碰文件；`set_themes_dir` 返回 `{ settings, report }`，执行中通过 `themes-dir-progress` 事件报阶段，整体成功前不改设置；`import_backup` 是合并恢复，不覆盖已有。
 - 除纯路径计算的 `get_data_dir` 外，所有命令都是 `async` + `spawn_blocking`；`import_theme` / `export_backup` / `import_backup` / `restore_theme_from_backup` / `run_auto_backup` / `set_themes_dir` / `export_all_themes` / 删除主题 / 批量删除 / 回收站恢复 / 彻底删除 / 清空 / 保存当前光标额外取 `ops::try_begin` 锁，并分别发 `import-progress` / `backup-progress` / `themes-dir-progress` / `export-all-progress` / `delete-progress`（自动备份与单主题恢复不发事件）。第二个重操作会立刻失败，不要改成排队；只读命令（`get_storage_stats` / `list_backups` / `verify_backup` 等）不取锁。
 
@@ -136,7 +139,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 
 ## 检查脚本逐条说明
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` 走交互链路。各脚本的验收内容：
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` / `close_ask_check` 走交互链路。各脚本的验收内容：
 
 - `nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 - `mine_view_check` 验收「我的主题」排序与筛选（决策 48 + 决策 53）：默认顺序不变 → 应用次数列与事件流口径一致、没记录显示「—」→ 注入一套最早/最小名/最少槽位的主题后各排序（含按应用次数）各自生效 → 从未使用筛选命中 → 计数标注 → 整理模式下控件让位 → 缺口筛选空态与恢复 → `?mock-broken-files=1` 缺口筛选命中带提示行 → 无 JS 异常。
@@ -156,6 +159,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `scheme_import_check` 验收 `.theme` 光标方案导入（决策 36）：store 直导（stem 命名 + 检查器选中）→ 拖入 `.theme` 走通 → 白名单外拒绝（新文案）→ `validateDrop` 放行 `.theme`、拒绝白名单外 → `.theme` 与 `.zip` 混拖进导入中心串行成功 → 无 JS 异常。
 - `backup_verify_check` 验收备份完整性体检（决策 37）：备份历史行内「体检」→ 完好包通过无徽标 → `?mock-backup-corrupt=1` 注入损坏报告 → 「体检损坏 N 处」徽标 + 警告 toast → 无 JS 异常。
 - `duplicate_check` 验收主题去重诊断（决策 38）：诊断中心六项齐全 → 默认「没有内容重复的主题」→ 重扫不变 → `?mock-duplicates=1` 摘要「1 组内容重复」+ 注意徽标 → 详情点名成员与可省字节 → 无 JS 异常。
+- `close_ask_check` 验收关窗询问（决策 57）：新装默认「每次询问」（mock 设置与设置页分段控件一致）→ `__closeAsk.simulate()` 弹窗出现（三按钮 + 「不再询问」）→ 取消不改设置 → 不勾选点「最小化到托盘」只执行本次（设置仍 ask、动作日志记 hide-to-tray）→ 勾选后「最小化到托盘」落盘为 tray → 勾选后「退出应用」落盘为 exit → 无 JS 异常。
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 
@@ -176,8 +180,18 @@ IPC 下导入两套 → 批量删除（重复 / 非法 ID）→ 主题库清空�
 `verify_iterate_features.mjs`（决策 53/54/55：隔离数据根手写事件流验证
 `apply_counts` 真机派生与窗口展示、`asCopy` 副本恢复的真实落盘与同 ID 冲突
 拒绝、轮换设置的 settings.json 落盘与越界拒绝——**全程不调 `apply_theme`**，
-真机注册表不隔离）与
+真机注册表不隔离）、`verify_close_ask.mjs`（决策 57：user32 直投 WM_CLOSE 的
+真实关窗拦截——询问框、不勾选一次性藏窗、勾选落盘 tray / exit、`exit_app`
+进程自行结束、exit 模式跨重启直接退、二次启动唤回隐藏窗）、
+`verify_splash.mjs`（决策 58：CDP `addScriptToEvaluateOnNewDocument` 注入
+rAF 探针 + `Page.reload` 确定性重放——真实窗口下开屏的出现、最短停留、
+淡出中间态、卸载时数据就绪、减少动态就绪即走、遮罩底色与页面底色一致）与
 `verify_cursor_size.mjs`（决策 51：光标大小注册表假设的真机证伪——唯一不启动
-应用的例外，整键备份还原，退出码 1 = 假设未证实）。
+应用的例外，整键备份还原，退出码 1 = 假设未证实）。另有诊断工具
+`_measure_gap.mjs`（`dev|release` 二选一：拆解启动时间线「进程→窗口→WebView
+导航→首帧→开屏」，连跑冷 / 暖两轮，只打印分段耗时、无断言不进验证链；
+release 模式跑 `--features tauri/custom-protocol` 构建的内嵌 dist，无需 vite）。
 **不进 CI、不入 `AGENTS.md` 验证链**——它们碰真实文件系统，改动导入链路（决策
-15/16/36/39/47 涉及的文件）或批量删除路径（决策 43）后手动跑一遍。历史证据（截图 + 结论）见 `docs/real-machine-verify/`。
+15/16/36/39/47 涉及的文件）、批量删除路径（决策 43）、关窗 / 激活链路（决策 57）
+或启动 / 开屏链路（决策 58）后手动跑一遍。历史证据（截图 + 结论）见
+`docs/real-machine-verify/`。

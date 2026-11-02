@@ -5,7 +5,7 @@
 // - 还原默认 → 挂起（不被立刻覆盖）；下次深浅色翻转恢复接管
 // - 关闭开关 → 深浅色翻转不再切
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
@@ -15,13 +15,22 @@ const PORT = 9233;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// mock 设置走 localStorage 持久化，profile 不清就会把上一次运行落的
+// 「开关开着 + 映射」带进本次，「默认关闭」断言永远翻车（与 schedule_check 同款防护）
+let PROFILE = join(OUT_DIR, "edge_auto_switch_profile");
+try {
+  rmSync(PROFILE, { recursive: true, force: true });
+} catch {
+  PROFILE = join(OUT_DIR, `edge_auto_switch_profile_${process.pid}`);
+}
+
 const edge = spawn(EDGE, [
   "--headless=new",
   "--disable-gpu",
   "--force-device-scale-factor=1",
   "--window-size=1200,800",
   `--remote-debugging-port=${PORT}`,
-  "--user-data-dir=" + join(OUT_DIR, "edge_auto_switch_profile"),
+  "--user-data-dir=" + PROFILE,
   "about:blank",
 ]);
 

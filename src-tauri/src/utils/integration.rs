@@ -13,8 +13,13 @@ use serde::{Deserialize, Serialize};
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 use windows::core::HSTRING;
-use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
+use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{
+    CreateEventW, CreateMutexW, INFINITE, SetEvent, WaitForSingleObject,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, IsWindowVisible, SetForegroundWindow, ShowWindowAsync, SW_RESTORE,
+};
 
 use crate::utils::{limits, log, paths};
 
@@ -51,28 +56,98 @@ pub fn already_running() -> bool {
     }
 }
 
-/// 把已运行的实例拉到前台。找不到窗口（标题被改、权限差异）就算了，静默放弃：
-/// 待导入路径已经落盘，用户下次聚焦窗口时照样会领走。
-pub fn activate_existing() -> bool {
+/// 「把窗口叫回来」的命名事件（`Local\` 会话内命名空间）。第二实例 `SetEvent`，
+/// 首个实例的守护线程（`spawn_show_waiter`）等到后在**主线程**上执行 show。
+///
+/// 为什么不让第二实例直接 ShowWindow：跨进程异步显示从别的进程发起时，
+/// 实测会静默失效（同样的 `ShowWindowAsync(SW_RESTORE)`，PowerShell 调用
+/// 可行、第二实例发出后窗口纹丝不动，2026-11-01 真机排查）；让属主进程在
+/// 创建者线程上同步显示自己的窗口，是构造上就没有坑的路径。
+const SHOW_EVENT_NAME: &str = "Local\\CursorStudio.ShowWindow";
+
+/// 首个实例：创建唤回事件并起守护线程。setup 阶段调一次；事件先于 waiter
+/// 创建（在 `handle_launch` 的首实例分支里），保证信号不丢。
+pub fn spawn_show_waiter(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let name = HSTRING::from(SHOW_EVENT_NAME);
+        let event = match unsafe { CreateEventW(None, false, false, &name) } {
+            Ok(handle) => handle,
+            Err(err) => {
+                log::warn("integration", &format!("创建窗口唤回事件失败，二次启动无法唤回隐藏窗（{err}）"));
+                return;
+            }
+        };
+        loop {
+            if unsafe { WaitForSingleObject(event, INFINITE) } == WAIT_OBJECT_0 {
+                let dispatcher = app.clone();
+                let for_show = app.clone();
+                let _ = dispatcher.run_on_main_thread(move || {
+                    crate::utils::tray::show_window(&for_show);
+                });
+            }
+        }
+    });
+}
+
+/// 首个实例启动时创建唤回事件（幂等；waiter 线程随后打开的是同一个）
+pub fn create_show_event() {
+    let name = HSTRING::from(SHOW_EVENT_NAME);
+    match unsafe { CreateEventW(None, false, false, &name) } {
+        Ok(_) => {}
+        Err(err) => log::warn("integration", &format!("创建窗口唤回事件失败（{err}）")),
+    }
+}
+
+/// 第二实例：向首个实例发唤回信号。事件不在（首个实例是旧版本 / 创建失败）
+/// 返回 false，调用方退回跨进程 ShowWindow 的老路。
+fn signal_show_event() -> bool {
+    let name = HSTRING::from(SHOW_EVENT_NAME);
+    match unsafe { CreateEventW(None, false, false, &name) } {
+        Ok(handle) => {
+            let exists = std::io::Error::last_os_error().raw_os_error() == Some(183);
+            let signaled = exists && unsafe { SetEvent(handle) }.is_ok();
+            let _ = unsafe { CloseHandle(handle) };
+            signaled
+        }
+        Err(_) => false,
+    }
+}
+
+/// 把已运行的实例拉到前台（旧版首个实例的兼容路径）。找不到窗口（标题被改、
+/// 权限差异）就算了，静默放弃：待导入路径已经落盘，用户下次聚焦窗口时照样
+/// 会领走。
+fn activate_existing() -> bool {
     let title = HSTRING::from(WINDOW_TITLE);
     // windows 0.56 的 FindWindowW 直接返回 HWND，找不到是零值而非 Err
     let hwnd = unsafe { FindWindowW(None, &title) };
     if hwnd.0 == 0 {
         return false;
     }
-    // 先还原再置前：窗口可能正藏在托盘里（关闭行为 = 最小化到托盘），
-    // 对隐藏窗只调 SetForegroundWindow 是叫不回来的
-    let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
-    let _ = unsafe { SetForegroundWindow(hwnd) };
+    // 窗口可能正藏在托盘里：对隐藏窗只调 SetForegroundWindow 是叫不回来的。
+    // 用 ShowWindowAsync 而不是同步 ShowWindow——本调用线程对这扇窗的第一次
+    // ShowWindow 会被窗口管理器的起始显示惯例吞掉（真机实证）。显示落地后再
+    // 抢前台，顺序反过来会让这次显示静默失效（真机实证，2026-11-01）。
+    let _ = unsafe { ShowWindowAsync(hwnd, SW_RESTORE) };
+    let mut shown = false;
+    for _ in 0..20 {
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            shown = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if shown {
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+    }
     true
 }
 
 /// 启动期统一入口：单实例判定 + `--import` 转交。
 ///
-/// - 已有实例：把待导入路径落盘 → 拉起旧窗口 → 本进程退出；
-/// - 首个实例：把待导入路径落盘（前端启动后领取），继续正常启动。
+/// - 已有实例：把待导入路径落盘 → 发唤回信号（旧版退回 ShowWindow）→ 本进程退出；
+/// - 首个实例：创建唤回事件，把待导入路径落盘（前端启动后领取），继续正常启动。
 ///
-/// 不带 `--import` 的普通二次启动也走这里：聚焦旧实例，不双开。
+/// 不带 `--import` 的普通二次启动也走这里：唤回旧实例，不双开。
 pub fn handle_launch() {
     let import = startup_import_arg();
 
@@ -80,9 +155,13 @@ pub fn handle_launch() {
         if let Some(path) = &import {
             let _ = write_pending_import(path);
         }
-        activate_existing();
+        if !signal_show_event() {
+            activate_existing();
+        }
         std::process::exit(0);
     }
+
+    create_show_event();
 
     if let Some(path) = &import {
         let _ = write_pending_import(path);

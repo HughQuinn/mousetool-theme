@@ -141,7 +141,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 41 个）
+## 5. 命令契约（当前共 43 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -167,6 +167,8 @@ App.tsx
 | `get_zip_menu_registered` | — | `ZipMenuStatus` | **不失败**（读不到就当未注册） |
 | `set_zip_menu` | `register`（布尔） | `void` | 注册表写失败（试点功能，决策 12） |
 | `take_pending_import` | — | `String \| null` | **不失败**（无待导入 / 文件损坏都返回 null，领取即删除） |
+| `hide_window_to_tray` | — | `void` | 主窗口隐藏失败；托盘创建失败只记日志不报错（托盘是配套件）。关窗询问里选「最小化到托盘」的一次性执行：藏窗后 `tray::sync` 按 ask 模式「藏窗期间存在」补图标（决策 57） |
+| `exit_app` | — | `void` | **不失败**（正常路径直接结束进程，仅任务异常退出才 Err）。关窗询问里选「退出应用」的执行口（决策 57） |
 | `get_settings` | — | `SettingsSnapshot` | 数据根不可用；设置文件缺失 / 损坏退回默认值——损坏文件先自动改名备份（`.corrupt-<时间>.bak`），并随 `warnings` 返回提示 |
 | `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`, `autoSwitchEnabled?`, `autoSwitchLightId?`, `autoSwitchDarkId?`, `cursorGuardEnabled?`, `autoBackupEnabled?`, `autoBackupKeep?`, `scheduleSwitchEnabled?`, `scheduleStart?`, `scheduleEnd?`, `scheduleInId?`, `scheduleOutId?`, `rotateEnabled?`, `rotateIntervalMinutes?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、保留份数不在 1–100、时间不是合法 `HH:MM`、轮换间隔不在 15–1440、写盘失败；关闭行为变更会同步托盘有无；主题 ID 用空串表示清空 |
 | `get_autostart` | — | `AutostartStatus` | **不失败**（读不到就当未注册）；开启时 `exe_path` 返回注册表里实际登记的程序路径 |
@@ -337,3 +339,4 @@ App.tsx
 | 2026-11-01 | 决策 53：应用次数统计——`get_all_themes` 顺带从事件流派生 `apply_counts`（命令数保持 41），「我的主题」加「应用次数」列与「按应用次数」排序；顺手修正决策 48 并列排序实现（同数按导入时间新在前）；验收并入 `mine_view_check.mjs`（17 项） |
 | 2026-11-01 | 决策 54：回收站恢复为副本——`restore_from_trash` 增加可选 `asCopy`，目标 ID 被占时分配新 UUID 复制落盘（id / 目录名 / 名称「（副本）」同步改写），`RestoreOutcome` 补 `theme_id`；普通恢复拒绝语义不变；命令数保持 41，验收 `scripts/trash_copy_check.mjs` |
 | 2026-11-01 | 决策 55：定时轮换主题——`settings.json` 新增 `rotate_enabled` / `rotate_interval_minutes`（默认关 / 60，后端校验 15–1440），前端新增 `lib/theme-rotate.ts`（纯函数拆 `theme-rotate-core.ts`），间隔定时器触发、优先级最低（定时切换或跟随系统开启时让位，还原默认挂起）；命令数保持 41，验收 `scripts/rotate_check.mjs` |
+| 2026-11-01 | 决策 57：关闭行为三态——`close_behavior` 扩为 ask（每次询问，新装默认）/ tray / exit；ask 下 Rust 拦 CloseRequested 发 `close-ask` 事件、前端 `CloseAskDialog` 弹询问框（「不再询问」勾选后本次选择经 `update_settings` 落盘）；托盘存在规则放宽为「tray 常驻 / ask 藏窗期间 / exit 从不」（`tray::sync` 统一判定）；新增 `hide_window_to_tray` / `exit_app`（命令契约 41 → 43）。真机验证揪出两处 ShowWindow 静默失效并修复：藏窗改 `run_on_main_thread`（非创建线程首调被吞）、二次启动唤回改命名事件 + 首实例主线程自显（跨进程 ShowWindow 静默失效，决策 12 老路径的既有 bug），验收 `scripts/real_machine/verify_close_ask.mjs`（21 项，证据 `docs/real-machine-verify/决策57真机验证.md`）+ `scripts/close_ask_check.mjs`（17 项） |
