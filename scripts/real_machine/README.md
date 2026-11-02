@@ -22,7 +22,7 @@
 | `verify_batch_delete.mjs` | 决策 43：真实 Tauri IPC 与真实回收站下导入两套主题 → `delete_themes`（重复 ID + 非法 ID）→ 主题库清空、回收站两条正常 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_import_duplicate.mjs` | 决策 47：同内容包二次导入 `duplicate_of` 点名 + warnings 人话版、不拦截；内容不同不误报 | 脚本自造（复制 `C:WindowsCursorsaero_arrow.cur`） |
 | `verify_iterate_features.mjs` | 决策 53/54/55：`apply_counts` 按事件流真机派生并上窗口（手写隔离事件流，不碰注册表）；`restore_from_trash` 的 `asCopy` 新 UUID 落盘 + `theme.json` 改写 +「（副本）」、同 ID 冲突时普通恢复仍拒绝；轮换设置真机落盘、越界拒绝、设置卡渲染。**全程不调 `apply_theme`**（真机注册表不隔离，改了就是用户的真实光标） | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` + 手写 v2 `history.json`、按原 ID 重建同 ID 主题） |
-| `verify_ani_blur.mjs` | 决策 60：真实 OS 焦点迁移（激活桌面夺走焦点）下 AniPlayer 失焦停表（drawImage 计数冻结为 0）、重新聚焦续播；只读系统方案预览，不碰注册表与用户主题 | 无需造输入（PowerShell AppActivate 切焦点） |
+| `verify_ani_blur.mjs` | 决策 60：AniPlayer 失焦停表——首选真实 OS 焦点迁移（激活桌面夺走焦点、重聚焦续播）；**锁屏 / 无交互会话下 OS 前台操作整体失效，自动降级为合成事件验证应用内停表链（明确打印 SKIP 与档位，续播方向只留 OS 档断言）**。只读系统方案预览，不碰注册表与用户主题 | 无需造输入（PowerShell AppActivate 切焦点） |
 | `verify_theme_meta.mjs` | 决策 61：`rename_theme` 的名称 + 描述补丁语义在真实 IPC 下可用——改名+描述一起生效、磁盘 `theme.json` 落盘、只改描述时名称与导入时间不动、空串清除、省略参数补丁语义、超长拒绝、列表重读一致 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_export_selected.mjs` | 决策 62：`export_all_themes` 传 ID 清单只导那套（真实 zip 落盘核验）、未知 ID 落空不报错、省略清单全量导出（重名加序号兜底顺带覆盖） | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` × 2） |
 | `verify_ui_smoke.mjs` | 纯前端改动的真机冒烟：真实 WebView2 窗口里三栏骨架 / 图库卡片 / 侧栏三态卡正常渲染、无 JS 异常。**全程不碰注册表**（不调 apply / restore）——动效与交互断言的主战场在浏览器 mock 链，这里只证明真实窗口里也成立 | 无需造输入 |
