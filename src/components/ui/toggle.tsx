@@ -11,8 +11,8 @@ export interface ToggleProps {
 /**
  * 开关（role="switch"）
  *
- * 桌面端开关对应 Windows 设置里的「开 / 关」两态，不做半开、不做动画回弹。
- * 轨道 24×44、滑块 20 圆形，全部落在 2px 网格上；动效只过渡颜色与位移。
+ * 桌面端开关对应 Windows 设置里的「开 / 关」两态，不做半开；
+ * 滑块走 spring 曲线：到位后过冲一次再收回（决策 59），轨道颜色仍走 fast 档。
  */
 export function Toggle({ checked, onCheckedChange, label, disabled }: ToggleProps) {
   return (
@@ -32,7 +32,7 @@ export function Toggle({ checked, onCheckedChange, label, disabled }: ToggleProp
       <span
         aria-hidden
         className={cn(
-          "absolute top-0.5 left-0.5 size-5 rounded-full bg-background shadow-raised transition-[translate] duration-(--motion-fast) ease-standard",
+          "absolute top-0.5 left-0.5 size-5 rounded-full bg-background shadow-raised transition-[translate] duration-(--motion-spring) ease-spring",
           checked && "translate-x-5",
         )}
       />

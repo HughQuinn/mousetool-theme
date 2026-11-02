@@ -52,9 +52,9 @@ export function Checkbox({
       )}
     >
       {indeterminate ? (
-        <Minus className="size-3.5" strokeWidth={3} aria-hidden />
+        <Minus className="size-3.5 check-pop" strokeWidth={3} aria-hidden />
       ) : checked ? (
-        <Check className="size-3.5" strokeWidth={3} aria-hidden />
+        <Check className="size-3.5 check-pop" strokeWidth={3} aria-hidden />
       ) : null}
     </button>
   );

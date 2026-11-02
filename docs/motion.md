@@ -14,29 +14,33 @@
 2. 每个组件的进入 / 退出 / 状态切换分别长什么样；
 3. 怎么证明它真的在动 —— 而不是"我看着挺顺"。
 
-默认前提：这是 Windows 桌面应用，动画要像系统的一部分，不要像网页特效。
+默认前提：这是 Windows 桌面应用。浮层、转场、列表要像系统的一部分——克制、不表演；**按压反馈自决策 59 起走弹性回弹**（用户拍板的"网页手感"）。两套口味并存，范围以 §3 的表为准。
 
 ---
 
-## 2. 度量：四档时长，两条曲线
+## 2. 度量：五档时长，三条曲线
 
 | 档位 | 时长 | Token | 曲线 | 用于 |
 |---|---|---|---|---|
-| fast | 120ms | `--motion-fast` | `ease-standard` | 悬停、按下、焦点环、关闭按钮 |
+| fast | 120ms | `--motion-fast` | `ease-standard` | 悬停、按下跟手、焦点环、关闭按钮 |
 | base | 180ms | `--motion-base` | `ease-standard` | 状态切换、遮罩淡入、堆叠让位 |
 | slow | 240ms | `--motion-slow` | `ease-standard` | 浮层入场（弹窗、Toast） |
 | exit | 160ms | `--motion-exit` | `ease-exit` | 所有浮层退场 |
+| spring | 320ms | `--motion-spring` | `ease-spring` | 弹性回弹：开关滑块位移、对勾入场、按钮松开回弹（决策 59） |
 
 ```css
 --ease-standard: cubic-bezier(0.2, 0, 0, 1);  /* 快起慢收，Windows 的手感 */
 --ease-exit:     cubic-bezier(0.4, 0, 1, 1);  /* 加速离开，读起来是"撤走" */
+--ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);  /* 终点前过冲 ~10% 再收回，弹而不闹 */
 ```
+
+**spring 档的用法约束（决策 59）**：只给「看得见的行程」用——位移（滑块 20px）与形状（对勾 0→1）。颜色不用它：320ms 的 hover 变色显得反应慢，颜色一律 fast。已定义的 `--ease-emphasized`（过冲仅 ~2%）对可见行程太弱，维持定义但不使用。
 
 **为什么退场要单独一档、而且更短**：入场是"请你看"，可以慢；退场是"别挡路"，越拖越像卡住。退场比入场快 1/3，观感上才是干净地消失。
 
-**位移与缩放的上限**：位移 ≤ 8px，缩放 0.96–1.0。超过这个量级，桌面端会显得轻浮；缩放过度会让文字发虚。
+**位移与缩放的上限**：位移 ≤ 8px，缩放 0.96–1.0。超过这个量级，桌面端会显得轻浮；缩放过度会让文字发虚。spring 的过冲不受此限——它是回弹的一部分，滑块过冲 ~2px、对勾峰值 ~1.1 都在"弹一下"的量级。
 
-**硬规则**：组件里只写 `duration-(--motion-*)` 和 `ease-standard` / `ease-exit`。禁止 `duration-200` 这类裸数字，也禁止 `transition-all`。
+**硬规则**：组件里只写 `duration-(--motion-*)` 和 `ease-standard` / `ease-exit` / `ease-spring`。禁止 `duration-200` 这类裸数字，也禁止 `transition-all`。按钮按压的两段曲线（按下 fast、松开 spring）一条 Tailwind 声明写不出，集中在 App.css 的 `motion-press`（见 §4.4）。
 
 **唯一例外：Toast 倒计时条**。它是剩余时间的**读数**，不是装饰性动效：
 - 时长 = 该条 toast 的超时（3.2–6s），由组件内联 `animation-duration` 注入 —— 是数据不是档位；
@@ -55,7 +59,9 @@
 | **Toast** | 下方 8px 起、缩放 0.96→1、淡入，240ms，原点在右下 | 下沉 4px、缩到 0.98、淡出，160ms | 堆叠让位 180ms（FLIP）；关闭按钮悬停 120ms；倒计时条随剩余寿命 linear 缩短，悬停/失焦与计时器同挂起（§2 例外） |
 | **AlertDialog 遮罩** | 淡入 180ms | 淡出 160ms | — |
 | **AlertDialog 弹窗** | 缩放 0.96→1 + 淡入，240ms，中心原点 | 缩回 0.96 + 淡出，160ms | — |
-| **Button** | — | — | 悬停/焦点 120ms；按下 1px 位移；禁用不参与 |
+| **Button** | — | — | 悬停/焦点 120ms；按下 scale 0.97 + 1px 位移（120ms 跟手）；松开 scale 经 spring 320ms 回弹一次（决策 59，§4.4）；禁用不参与 |
+| **Toggle（开关滑块）** | — | — | 滑块位移 320ms ease-spring（过冲 ~2px 回位，决策 59）；轨道颜色 120ms |
+| **Checkbox** | — | — | 框颜色 120ms；对勾/横线入场 `check-pop`：scale 0→1 + ease-spring（峰值 ~1.1，决策 59）；取消勾选即卸载、无退场 |
 | **Input** | — | — | 焦点环与描边 120ms；错误态同档 |
 | **ThemeCard** | — | — | 悬停/选中 180ms（ring 宽度用 box-shadow 插值，不会"跳粗"）；按下 1px |
 | **侧栏导航** | — | — | 复用 Button 变体，120ms；当前项 `aria-current` |
@@ -77,6 +83,8 @@
 | 宽高 / 位置动画 | 触发布局重排，必然掉帧。高度变化一律交给 FLIP 的 transform |
 | Toast 滑动手势 | base-ui 已经用 transform 跟随指针，接管反而会打架 |
 | 面板拖拽补间 | 拖分隔条是直接操作，宽度必须跟手；补间会变成"拖完再滑一段"，反而更难对准 |
+| 点击涟漪（ripple） | 要 JS 记录点击坐标逐帧扩散，与「除 Toast FLIP 外全 CSS」的口径冲突；按钮已有「下沉 + 缩放回弹」双层反馈，涟漪是触摸屏的视觉补偿，鼠标桌面端收益低（决策 59） |
+| 内容卡片按压弹性 | GalleryCard 等面积大，scale 变化显眼且与"卡片是内容不是控件"的定位不符，维持 180ms 标准过渡（决策 59） |
 | 滚动条进出场的动画 | 滚动条是系统画的，能调的只有宽度与配色；`gutter: stable` 已经消除了"出现滚动条把内容挤一下"的跳动 |
 | 遮罩模糊动画 | 每帧 `backdrop-filter` 开销高，桌面端收益低 |
 
@@ -132,6 +140,28 @@ el.animate([{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }
 - 禁止 `transition-all`：它会把 `display`、宽高、`content-visibility` 一起卷进来。
 - 父级 hover 影响子级时，把过渡写在**真正变化的元素**上。
 
+### 4.4 按压弹性：两段曲线（决策 59）
+
+按钮「按下跟手、松开回弹」是**两段不同时长/曲线**的过渡，一条 Tailwind 声明写不出（`duration-*`/`ease-*` 是统一值），所以集中在 `App.css` 的 `motion-press`（`@utility`）里管，`button.tsx` 只引用类名：
+
+```css
+@utility motion-press {
+  transition: /* 颜色 + translate 全走 fast/standard，scale 走 spring */;
+  &:active {
+    scale: 0.97;
+    transition: /* 全部走 fast/standard —— 按下要跟手 */;
+  }
+}
+```
+
+CSS 的规则是「变化发生时按**新状态**的 transition 定义走」，所以：按下=进入 `:active`，缩放用 fast 档跟手；松开=回到常态，scale 用 spring 档（320ms）过冲回弹。**方向不能反**——反了按下迟钝、松开突然。
+
+三个配套点：
+
+1. **颜色不跟 scale 一起弹**：`motion-press` 的 transition 列表里颜色各项固定 fast/standard，只有 `scale` 一项吃 spring。320ms 的悬停变色会显得反应慢。
+2. **scale 是独立属性不是 `transform`**：与按下位移用的 `translate` 属性（`translate-y-px`）互不覆盖，两条过渡可以并存。
+3. **滑块/对勾不需要两段**：Toggle 点击即切换、Checkbox 对勾挂载即播，没有「按下/松开」两态，一条 spring 过渡/动画就够。
+
 ---
 
 ## 5. 可访问性
@@ -168,7 +198,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 必须和 dev server 写在同一条命令里 —— 跨命令的 dev server 会被回收。
 
-脚本逐帧采样，而不是单点截图，断言 33 项：
+脚本逐帧采样，而不是单点截图，断言 43 项：
 
 - Toast 入场/退场：是否真的在过渡、时长、中间态、位移、结束是否卸载；
 - Toast 倒计时条：时长是否等于该条超时、是否随时间缩短、悬停是否真冻结、移开是否继续；
@@ -176,6 +206,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 - Toast 让位：是否触发 FLIP、时长 180ms；
 - `prefers-reduced-motion`：时长是否被压到近似 0、是否跳过 FLIP、倒计时条是否不显示；
 - 控件：按钮 120ms、主题卡 180ms 且走 `box-shadow`；
+- 按压弹性（决策 59）：按钮过渡含 320ms spring 段、真实鼠标按下缩到 0.97、释放过冲超过原尺寸后回弹并停在原尺寸；开关滑块 320ms spring、切换越过终点（过冲 22px）后回位；对勾播 `check-pop`、过冲（scale > 1.05）后回位到 1；
 - 运行期无 JS 异常。
 
 改完动效，这条 + `design_check.mjs` 都绿才算完成。
@@ -186,6 +217,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-03 | 按压弹性（决策 59）：新增第五档 `--motion-spring`(320ms) 与 `--ease-spring` 曲线；Button 按下 scale 0.97 + 松开回弹（App.css `motion-press` 两段曲线，§4.4）、Toggle 滑块 spring 位移、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压列入「不做」；硬规则 ease 家族 +1；`motion_check` 33→43 项 |
 | 2026-11-02 | 开屏遮罩（决策 58）：logo 入场 `splash-in` 与整层退场全走既有四档 token，无新档位、无例外；「停留时长是启动编排不是动效」的口径记入 §3 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |
 | 2026-10-24 | Toast 倒计时条：贴卡片底边 scaleX 1→0（时长=超时、linear —— §2 唯一例外）；挂起与 base-ui 计时器同进退（data-expanded + 窗口焦点镜像）；`motion_check` 增至 33 项断言 |

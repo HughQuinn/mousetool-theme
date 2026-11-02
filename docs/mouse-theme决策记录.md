@@ -67,6 +67,7 @@
 | 56 | 提示层口径：toast 报事件不报状态 | 设置开关（patchSettings 系）成功静默、失败弹「设置失败」；状态反馈交给开关自身与卡片状态行；写注册表的操作（自启动/右键菜单）成功也弹；自动行为只在真干活/失败时弹且用 silent 防双弹；不给开关统一加成功回执 |
 | 57 | 关闭行为三态与关窗询问 | `close_behavior` 扩为 ask（每次询问，**新装默认**）/ tray / exit；ask 下 Rust 拦关窗发 `close-ask` 事件、前端弹询问框（缩到托盘 / 退出 / 取消 + 「不再询问」，勾选后本次选择落盘）；托盘在 ask 模式藏窗期间存在；命令数 41→43（`hide_window_to_tray` / `exit_app`） |
 | 58 | 启动开屏与主窗延迟显示 | 单窗口 CSS 遮罩（`SplashOverlay`）：数据就绪淡出、最短停留 800ms / 最长 5s 兜底、`loadError` 也放行；主窗 `visible: false` 起步，遮罩挂载发 `splash-ready` 事件经 `tray::show_window` 亮窗（**零新命令**）；ask 托盘判定加 `EVER_SHOWN`（启动期等待不算藏窗）；真机白屏 dev 冷启动 3.8s→50ms、release 951→42ms |
+| 59 | 交互动效弹性升级（按压回弹） | 用户拍板「网页手感」：新增 `--motion-spring`(320ms)/`--ease-spring`(过冲~10%) 档；Button 按下 scale 0.97 + 松开 spring 回弹（两段曲线集中 App.css `motion-press`）、Toggle 滑块 spring 位移（过冲 ~2px 回位）、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压不做；修订 motion.md 硬规则 ease 家族 +1 与 2026-10-21「不做回弹」口径；`motion_check` 33→43 项 |
 
 ---
 
@@ -1222,6 +1223,22 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **边界**：前端彻底加载失败时由 10s 兜底亮出白页（dev 下典型原因是 vite 未起）；F5 重载会重播开屏（生产无重载入口，dev 里重看效果反而方便）；开屏不阻断点击（`pointer-events-none`），就绪前的半成品界面可点但无碍。
 
 **验收**：真机 `scripts/real_machine/verify_splash.mjs` 11/11（2026-11-02，CDP `addScriptToEvaluateOnNewDocument` 注入 rAF 探针 + `Page.reload` 确定性重放，证据见 `docs/real-machine-verify/决策58真机验证.md`）；`verify_close_ask.mjs` 21/21 回归（`visible: false` + `EVER_SHOWN` 后决策 57 语义完好）；26 个浏览器检查脚本全绿；cargo test 249、clippy 零警告、前端单测 32。
+
+---
+
+## 决策 59：交互动效弹性升级（按压回弹）
+
+**结论**（2026-11-03）：控件按压反馈改走弹性回弹——用户拍板采用「网页手感」，授权按观感自主裁量（「我觉得好就行」）。新增第五档时长 `--motion-spring`(320ms) 与曲线 `--ease-spring`(cubic-bezier(0.34, 1.56, 0.64, 1)，终点前过冲 ~10% 再收回)；motion.md 2026-10-21 的「动画要像系统的一部分，不要像网页特效」与 toggle.tsx「不做动画回弹」的口径自此修订为：**浮层/转场维持克制，按压反馈走弹性**，范围以 motion.md §3 为准。
+
+- **范围（只有三处，其余不动）**：
+  - **Button**：`motion-press`（App.css 的 `@utility`）——按下 scale 0.97 + 1px 位移走 fast 档跟手，松开 scale 经 320ms spring 回弹一次。两段曲线（按下/松开各一套时长曲线）只有一条原生 transition 声明能做到按属性分列，Tailwind 的统一 `duration-*`/`ease-*` 写不出，故集中 App.css；颜色各项始终 fast/standard（320ms 的 hover 变色显得反应慢）；scale 用独立属性，与按下位移的 `translate` 互不覆盖。
+  - **Toggle**：滑块位移 120ms → 320ms ease-spring，过冲 ~2px 回位（实测 22.0→20.0px）；轨道颜色仍 120ms。
+  - **Checkbox**：对勾/横线入场 `check-pop`（scale 0→1 + ease-spring，实测峰值 1.098），挂载即播一次，取消勾选即卸载、无退场。
+- **token**：`--ease-emphasized`（过冲仅 ~2%）对可见行程太弱，维持定义但不使用；硬规则 ease 家族 +1（`ease-standard/ease-exit/ease-spring`），禁裸数字与 `transition-all` 不变。
+- **不做**：点击涟漪（要 JS 记录坐标逐帧扩散，与「除 Toast FLIP 外全 CSS」冲突，且按钮已有下沉+缩放双层反馈，鼠标桌面端收益低）；Segmented 选中项弹性（颜色过冲观感差）；内容卡片按压弹性（GalleryCard 面积大，scale 显眼，维持 180ms 标准）。
+- **兼容**：`prefers-reduced-motion` 全局兜底自动覆盖新 token（压到 0.01ms，实测断言通过）；无新依赖。
+- **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。
+- **环境坑（备查）**：`%TEMP%edge_headless_profile` 残留会让 motion_check 假失败（toast 不卸载、删除按钮轮询不到），删除该目录即恢复；诊断时用独立 profile 的脚本对照定位。
 
 ---
 

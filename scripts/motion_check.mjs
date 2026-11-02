@@ -198,21 +198,32 @@ try {
       const card = byText('Neon Night');
       if (!card) return JSON.stringify({ error: '找不到可删除的示例主题' });
       card.click();
-      await sleep(200);
-
-      const del = document.querySelector('[aria-label="删除此主题"]');
-      out.deleteEnabled = Boolean(del) && !del.disabled;
-      del.click();
-      out.enterFrames = [];
+      // 检查器挂载有淡入，固定 sleep 会假失败 —— 轮询等删除按钮出现
+      let del = null;
       const t0 = performance.now();
-      while (performance.now() - t0 < 320) {
+      while (performance.now() - t0 < 800) {
+        await new Promise((r) => requestAnimationFrame(r));
+        del = document.querySelector('[aria-label="删除此主题"]');
+        if (del && !del.disabled) break;
+      }
+      out.deleteEnabled = Boolean(del) && !del.disabled;
+      if (!out.deleteEnabled) return JSON.stringify({ ...out, error: '删除按钮未就绪' });
+      del.click();
+      // 弹窗同样等它真的挂载再进入采样窗口
+      const t1 = performance.now();
+      while (performance.now() - t1 < 800 && !popup()) {
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      out.enterFrames = [];
+      const t2 = performance.now();
+      while (performance.now() - t2 < 320) {
         await new Promise((r) => requestAnimationFrame(r));
         const p = popup();
         const b = backdrop();
         out.enterFrames.push(p && b ? { popup: readFrame(p), backdrop: readFrame(b) } : null);
       }
       await sleep(220);
-      out.settled = readFrame(popup());
+      out.settled = popup() ? readFrame(popup()) : null;
 
       byText('取消').click();
       out.exitFrames = await watch(popup, 260);
@@ -413,6 +424,7 @@ try {
         return {
           property: cs.transitionProperty,
           duration: parseFloat(cs.transitionDuration) || 0,
+          durations: cs.transitionDuration,
           easing: cs.transitionTimingFunction,
         };
       };
@@ -426,6 +438,146 @@ try {
     `${controls.card?.duration}s ${controls.card?.property}`,
   );
   check("主题卡过渡用的是标准曲线", (controls.card?.easing ?? "").includes("cubic-bezier(0.2, 0, 0, 1)"), controls.card?.easing);
+
+  check(
+    "按钮过渡含 320ms spring 段（决策 59）",
+    (controls.nav?.durations ?? "").includes("0.32") &&
+      (controls.nav?.easing ?? "").includes("cubic-bezier(0.34, 1.56, 0.64, 1)"),
+    `${controls.nav?.durations} / ${controls.nav?.easing}`,
+  );
+
+  // ── 6. 按压弹性（决策 59）：真实鼠标按下/释放，采样 scale ──
+  const navPoint = JSON.parse(
+    await evaluate(`(() => {
+      const r = document.querySelector('nav button').getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+    })()`),
+  );
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", ...navPoint, button: "left", clickCount: 1 });
+  const pressDown = JSON.parse(
+    await evaluate(`(async () => {
+      const el = document.querySelector('nav button');
+      let minScale = 1;
+      const t0 = performance.now();
+      while (performance.now() - t0 < 240) {
+        await new Promise((r) => requestAnimationFrame(r));
+        minScale = Math.min(minScale, Number(getComputedStyle(el).scale) || 1);
+      }
+      return JSON.stringify({ minScale });
+    })()`),
+  );
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...navPoint, button: "left", clickCount: 1 });
+  const pressUp = JSON.parse(
+    await evaluate(`(async () => {
+      const el = document.querySelector('nav button');
+      let maxScale = 0;
+      let endScale = 0;
+      const t0 = performance.now();
+      while (performance.now() - t0 < 420) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const s = Number(getComputedStyle(el).scale) || 1;
+        maxScale = Math.max(maxScale, s);
+        endScale = s;
+      }
+      return JSON.stringify({ maxScale, endScale });
+    })()`),
+  );
+  check("按钮按下缩到 0.97", pressDown.minScale < 0.985, `minScale=${pressDown.minScale.toFixed(3)}`);
+  check("按钮释放过冲超过原尺寸后回弹", pressUp.maxScale > 1.0005, `maxScale=${pressUp.maxScale.toFixed(4)}`);
+  check("按钮回弹停在原尺寸", Math.abs(pressUp.endScale - 1) < 0.002, `endScale=${pressUp.endScale.toFixed(4)}`);
+
+  // 开关滑块：设置页采样 —— 320ms spring、切换越过终点再回位
+  // 侧栏有「主导航」「设置导航」两个 nav（按页面切换内容），必须限定主导航
+  const toggle = JSON.parse(
+    await evaluate(`(async () => {
+      const navBtn = (text) => [...document.querySelectorAll('nav[aria-label="主导航"] button')].find((b) => b.textContent.includes(text));
+      navBtn('设置')?.click();
+      await new Promise((r) => setTimeout(r, 260));
+      const all = [...document.querySelectorAll('[role="switch"]')].filter((b) => !b.disabled);
+      const sw = all.find((b) => b.getAttribute('aria-checked') === 'false') ?? all[0];
+      if (!sw) return JSON.stringify({ error: 'no-switch' });
+      const knob = sw.querySelector('span');
+      const startChecked = sw.getAttribute('aria-checked') === 'true';
+      const target = startChecked ? 0 : 20;
+      const frames = [];
+      sw.click();
+      const t0 = performance.now();
+      while (performance.now() - t0 < 420) {
+        await new Promise((r) => requestAnimationFrame(r));
+        frames.push(parseFloat(getComputedStyle(knob).translate) || 0);
+      }
+      const end = parseFloat(getComputedStyle(knob).translate) || 0;
+      return JSON.stringify({ startChecked, target, frames, end });
+    })()`),
+  );
+  if (toggle.error) {
+    check("设置页有可用开关（用于验证）", false, toggle.error);
+  } else {
+    const cs = JSON.parse(
+      await evaluate(`(() => {
+        const knob = document.querySelector('[role="switch"] span');
+        const c = getComputedStyle(knob);
+        return JSON.stringify({ duration: c.transitionDuration, easing: c.transitionTimingFunction });
+      })()`),
+    );
+    check("开关滑块走 320ms spring 曲线", cs.duration === "0.32s" && cs.easing.includes("cubic-bezier(0.34, 1.56, 0.64, 1)"), `${cs.duration} ${cs.easing}`);
+    check("开关滑块切换有中间态", toggle.frames.some((t) => Math.min(toggle.startChecked ? 20 : 0, toggle.target) < t && t < Math.max(toggle.startChecked ? 20 : 0, toggle.target) + 0.5), `translate=${toggle.frames.map((t) => t.toFixed(1)).join(",")}`);
+    const overshoot = toggle.startChecked ? Math.min(...toggle.frames) : Math.max(...toggle.frames);
+    const overshot = toggle.startChecked ? overshoot < -1 : overshoot > toggle.target + 1;
+    check("开关滑块越过终点后回位（回弹）", overshot && Math.abs(toggle.end - toggle.target) < 1, `overshoot=${overshoot.toFixed(1)} end=${toggle.end.toFixed(1)}`);
+  }
+
+  // 复选框对勾：我的主题页 —— check-pop 入场、过冲、回位
+  // 导航按钮带数量徽章，textContent 是「我的主题N」，只能 includes 匹配；
+  // 行级复选框要先点「批量整理」进选择模式才渲染；
+  // 设置页激活时侧栏只渲染「设置导航」（主导航不在 DOM），先点「返回」回内容页
+  const checkbox = JSON.parse(
+    await evaluate(`(async () => {
+      const navBtn = (text) => [...document.querySelectorAll('nav[aria-label="主导航"] button')].find((b) => b.textContent.includes(text));
+      if (!navBtn('我的主题')) {
+        [...document.querySelectorAll('nav[aria-label="设置导航"] button')].find((b) => b.textContent.includes('返回'))?.click();
+        await new Promise((r) => setTimeout(r, 260));
+      }
+      navBtn('我的主题')?.click();
+      await new Promise((r) => setTimeout(r, 260));
+      document.querySelector('[data-batch-mode]')?.click();
+      await new Promise((r) => setTimeout(r, 200));
+      let cb = null;
+      for (const b of document.querySelectorAll('[role="checkbox"]')) {
+        if (!b.disabled && b.getAttribute('aria-checked') !== 'true') { cb = b; break; }
+      }
+      if (!cb) return JSON.stringify({ error: 'no-unchecked-checkbox' });
+      const frames = [];
+      cb.click();
+      const t0 = performance.now();
+      while (performance.now() - t0 < 420) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const svg = cb.querySelector('svg');
+        if (!svg) continue;
+        const a = svg.getAnimations().find((x) => x.playState === 'running' || x.playState === 'finished');
+        frames.push({ scale: Number(getComputedStyle(svg).scale) || 0, name: a?.animationName ?? '' });
+      }
+      const svg = cb.querySelector('svg');
+      return JSON.stringify({ frames, finalScale: svg ? Number(getComputedStyle(svg).scale) : null });
+    })()`),
+  );
+  if (checkbox.error) {
+    check("我的主题页有未选中的复选框（用于验证）", false, checkbox.error);
+  } else {
+    check("对勾入场播 check-pop", checkbox.frames.some((f) => f.name === "check-pop"), [...new Set(checkbox.frames.map((f) => f.name))].join(",") || "无");
+    check("对勾入场过冲（scale > 1.05）", checkbox.frames.some((f) => f.scale > 1.05), `max=${Math.max(...checkbox.frames.map((f) => f.scale)).toFixed(3)}`);
+    check("对勾回位到 1", Math.abs((checkbox.finalScale ?? 0) - 1) < 0.01, `finalScale=${checkbox.finalScale}`);
+  }
+
+  // 采样切了页，回到图库保持现场干净
+  await evaluate(`(() => {
+    const navBtn = (text) => [...document.querySelectorAll('nav[aria-label="主导航"] button')].find((b) => b.textContent.includes(text));
+    if (navBtn('主题图库')) {
+      navBtn('主题图库').click();
+    } else {
+      [...document.querySelectorAll('nav[aria-label="设置导航"] button')].find((b) => b.textContent.includes('返回'))?.click();
+    }
+  })()`);
 
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
 
