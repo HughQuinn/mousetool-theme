@@ -68,6 +68,7 @@
 | 57 | 关闭行为三态与关窗询问 | `close_behavior` 扩为 ask（每次询问，**新装默认**）/ tray / exit；ask 下 Rust 拦关窗发 `close-ask` 事件、前端弹询问框（缩到托盘 / 退出 / 取消 + 「不再询问」，勾选后本次选择落盘）；托盘在 ask 模式藏窗期间存在；命令数 41→43（`hide_window_to_tray` / `exit_app`） |
 | 58 | 启动开屏与主窗延迟显示 | 单窗口 CSS 遮罩（`SplashOverlay`）：数据就绪淡出、最短停留 800ms / 最长 5s 兜底、`loadError` 也放行；主窗 `visible: false` 起步，遮罩挂载发 `splash-ready` 事件经 `tray::show_window` 亮窗（**零新命令**）；ask 托盘判定加 `EVER_SHOWN`（启动期等待不算藏窗）；真机白屏 dev 冷启动 3.8s→50ms、release 951→42ms |
 | 59 | 交互动效弹性升级（按压回弹） | 用户拍板「网页手感」：新增 `--motion-spring`(320ms)/`--ease-spring`(过冲~10%) 档；Button 按下 scale 0.97 + 松开 spring 回弹（两段曲线集中 App.css `motion-press`）、Toggle 滑块 spring 位移（过冲 ~2px 回位）、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压不做；修订 motion.md 硬规则 ease 家族 +1 与 2026-10-21「不做回弹」口径；`motion_check` 33→43 项 |
+| 60 | 按压水滴（涟漪 + 水珠晃动） | 用户要「水滴感」：涟漪从决策 59 的「不做」翻案——按下从点击点荡开涟漪（500ms 淡出，currentColor 全变体通用）、松开 scale 走衰减振荡（0.97→1.02→0.993→1.004→1，480ms）替代单次回弹；`press-water.ts` 全局委托（凡 `button.motion-press`，覆盖 buttonVariants 原生按钮），WAAPI 一次性动画、减少动态跳过；开关滑块/对勾维持单次回弹；`motion_check` 43→47 项 |
 
 ---
 
@@ -1239,6 +1240,19 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **兼容**：`prefers-reduced-motion` 全局兜底自动覆盖新 token（压到 0.01ms，实测断言通过）；无新依赖。
 - **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。真机 `scripts/real_machine/verify_spring_motion.mjs` 14/14（2026-11-03，真实 WebView2 + 隔离数据根，真实鼠标按下/释放采样，数据与 mock 逐项一致；证据见 `docs/real-machine-verify/决策59真机验证.md`）。
 - **环境坑（备查）**：`%TEMP%edge_headless_profile` 残留会让 motion_check 假失败（toast 不卸载、删除按钮轮询不到），删除该目录即恢复；诊断时用独立 profile 的脚本对照定位。
+
+---
+
+## 决策 60：按压水滴——涟漪 + 水珠晃动
+
+**结论**（2026-11-03）：决策 59 落地后用户追加「想要有种水滴感的效果」，在按压反馈上再进一步——**涟漪**（决策 59 曾裁掉，本次翻案）与**水珠晃动**（松开后的多周期衰减振荡）两件套，只作用在 `motion-press` 按钮上，开关滑块/对勾维持单次回弹。
+
+- **涟漪**：pointerdown 从点击点荡开一圈圆波（`scale 0→1 + opacity 0.22→0`，500ms `ease-standard`，`finished` 后移除）。颜色取 `currentColor`：default 按钮白波、ghost/outline 前景色波，一套代码全变体通用。容器所需的 `relative + overflow-hidden` 并进 `motion-press` 工具类。
+- **水珠晃动**：pointerup 后 480ms 衰减振荡 keyframes（`scale 0.97→1.02→0.993→1.004→1`）替代 motion.md §4.4 的单次 spring 回弹——WAAPI 动画优先于 transition，播完 CSS 已稳定在 1，无缝衔接。
+- **全局委托而非逐组件挂载**：`installPressWater()`（App 挂一份）document 捕获 pointerdown，`closest('button.motion-press')` 命中才动。原因：侧栏导航等处是 `buttonVariants()` 类串配原生 `<button>`（要塞活动条等自定义结构），逐组件挂会漏——类名即行为标记，凡 `motion-press` 就有水滴，未来变体自动获得。
+- **性能与可访问性**：涟漪与晃动都是一次性 WAAPI 补间（与 Toast FLIP 同级，非常驻逐帧 JS）；`prefers-reduced-motion` 下 JS 侧直接跳过（缩放反馈仍由 CSS transition 提供，瞬时完成）；晃动用独立 `scale` 属性不碰 `transform`（不覆盖按下位移的 translate）；键盘激活不出水滴（没有坐标）。
+- **不做**：开关滑块/对勾的水珠晃动（开关要利落）；内容卡片（维持决策 59）。
+- **验收**：`motion_check.mjs` 47/47——新增 4 项（真实鼠标按下荡开涟漪、500ms 后移除、晃动过冲 >1.01 且峰值后下穿再回 1、减少动态下不产生涟漪）；`npm run build` 通过。
 
 ---
 
