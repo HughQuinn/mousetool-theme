@@ -98,7 +98,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 
 - **任务层弹窗与子页**（决策 23/26/34）：诊断、批量导入与备份内容都是任务层弹窗；备份历史与回收站是「数据」子页。不进 `PAGE_META` / `VIEWS`，不加导航、不加设置分组（备份内容从备份历史的行内「查看内容」打开）。单文件导入（侧栏按钮 / Ctrl+O / 拖 1 个）保持原链路不动；拖 2–20 个进 `importStore` 队列，串行执行、失败可单独重试。外部改写态下「保存并应用」只出现在侧栏当前使用卡，也不新开页面（决策 28）。
 - **设置五分组**（决策 14）：通用 = 应用主题三态（从侧栏迁入）/ 跟随系统切换主题（浅/深配对，决策 25）/ 定时切换主题（时间段内/外配对，默认关闭，决策 33）/ 定时轮换主题（间隔轮换「我的主题」，默认关闭，决策 55）/ 光标守护（启动或系统改写后自动恢复上次主题，默认关闭，决策 29）/ 开机自启动 / 关闭行为（直接退出·最小化到托盘）/ 主题存储目录 / 自动检查更新；快捷键 = 应用内快捷键一览 + 开关；数据 = 数据目录 + 存储占用（决策 35）+ 数据备份（导出/合并恢复）+ 自动备份（每天一份进备份历史，默认关闭，决策 32）+ 备份历史（含内容浏览与单主题恢复，决策 34）+ 回收站（恢复 / 恢复为副本 / 彻底删除 / 清空，决策 26/54）+ 清空使用记录（决策 35）+ 诊断信息；系统集成 = 鼠标属性面板直达 + 右键菜单开关（试点）；关于 = 版本 / 开源地址 / 检查更新（GitHub Releases）。进设置后侧栏整体切成「返回 + 分组」，页头跟随分组标题。
-- 改名只做在 `ThemeNameField` 一处（检查器头部）；描述编辑同理只做在 `ThemeDescriptionField`（决策 61，与改名共用 `rename_theme` 的补丁语义）；表格行内的操作只有导出与删除。槽位统计口径在 `lib/slots.ts`（`SYSTEM_SLOT_TOTAL = 15` 是 `SLOT_DEFS` 的镜像，后端改槽位必须同步改它）。
+- 改名只做在 `ThemeNameField` 一处（检查器头部）；描述编辑同理只做在 `ThemeDescriptionField`（决策 61，与改名共用 `rename_theme` 的补丁语义）；表格行内的操作只有导出与删除，右键菜单（决策 65，图库卡与表格行）的重命名 / 删除**不直接执行**——发 `mousetool:request-rename` / `request-delete` 事件让检查器里已有的编辑框与确认框接手（延后一拍等监听挂上）。槽位统计口径在 `lib/slots.ts`（`SYSTEM_SLOT_TOTAL = 15` 是 `SLOT_DEFS` 的镜像，后端改槽位必须同步改它）。
 - **文件缺口**（声明了的槽位文件读不到，决策 31）只在三处提示：「我的主题」槽位列「缺 N 个文件」、检查器头部警示条（点名槽位中文名 + 「应用后写成空」的后果）、诊断中心第五项「文件完整性」；图库卡与最近使用不背管理信息。缺口**只展示不拦截**——应用 / 导出等命令行为不变，别给它加确认弹窗或自动修复。
 - 「我的主题」工具条排序与筛选——最新/最早/名称/槽位完整度/应用次数 × 缺文件的/从未使用的，会话内不落盘（决策 48/53）。并列排序口径：槽位 / 次数同数按导入时间**新在前**（决策 48 原文，`byDateNewestFirst`）。
 
@@ -136,7 +136,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 
 ## 检查脚本逐条说明
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` 走交互链路。各脚本的验收内容：
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `trash_copy_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `rotate_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `batch_check` / `scheme_import_check` / `mine_view_check` / `context_menu_check` 走交互链路。各脚本的验收内容：
 
 - `nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 - `mine_view_check` 验收「我的主题」排序与筛选（决策 48 + 决策 53）：默认顺序不变 → 应用次数列与事件流口径一致、没记录显示「—」→ 注入一套最早/最小名/最少槽位的主题后各排序（含按应用次数）各自生效 → 从未使用筛选命中 → 计数标注 → 整理模式下控件让位 → 缺口筛选空态与恢复 → `?mock-broken-files=1` 缺口筛选命中带提示行 → 无 JS 异常。
@@ -156,6 +156,7 @@ NSIS 走**整窗自绘模板** `installer/template/installer.nsi`（设计源 `d
 - `scheme_import_check` 验收 `.theme` 光标方案导入（决策 36）：store 直导（stem 命名 + 检查器选中）→ 拖入 `.theme` 走通 → 白名单外拒绝（新文案）→ `validateDrop` 放行 `.theme`、拒绝白名单外 → `.theme` 与 `.zip` 混拖进导入中心串行成功 → 无 JS 异常。
 - `backup_verify_check` 验收备份完整性体检（决策 37）：备份历史行内「体检」→ 完好包通过无徽标 → `?mock-backup-corrupt=1` 注入损坏报告 → 「体检损坏 N 处」徽标 + 警告 toast → 无 JS 异常。
 - `duplicate_check` 验收主题去重诊断（决策 38）：诊断中心六项齐全 → 默认「没有内容重复的主题」→ 重扫不变 → `?mock-duplicates=1` 摘要「1 组内容重复」+ 注意徽标 → 详情点名成员与可省字节 → 无 JS 异常。
+- `context_menu_check` 验收右键菜单（决策 65）：图库卡右键出菜单四项齐全 → 点「应用」生效且徽标出现 → 使用中主题无应用项、删除禁用并说明 → 系统方案只有应用 / 导出 → Esc 关闭 → 「重命名」让检查器进编辑态、「删除」开确认框 → 「我的主题」行右键同样可用 → 无 JS 异常。
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 

@@ -40,6 +40,17 @@ export function ThemeNameField({ theme, nameClassName, compact = false }: ThemeN
     setEditing(false);
   }, [theme.id, theme.name]);
 
+  // 右键菜单的「重命名」请求（决策 65）：只应答自己这个主题
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail;
+      if (detail?.id && detail.id !== theme.id) return;
+      startEdit();
+    };
+    window.addEventListener("mousetool:request-rename", onRequest);
+    return () => window.removeEventListener("mousetool:request-rename", onRequest);
+  });
+
   const startEdit = () => {
     draftRef.current = theme.name;
     setDraft(theme.name);

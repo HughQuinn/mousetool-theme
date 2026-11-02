@@ -56,6 +56,33 @@ try {
     "使用中 / 系统默认 / 被系统设置修改 三选一",
   );
 
+  // 右键菜单（决策 65）：真实窗口里能弹出与关闭；**不点任何动作项**——
+  // 应用会写真实注册表，冒烟只验证交互层活着
+  const contextMenu = JSON.parse(
+    await cdp.evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const card = document.querySelector("[data-theme-card]");
+      if (!card) return JSON.stringify({ error: "no-card" });
+      const r = card.getBoundingClientRect();
+      card.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true,
+        clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+      }));
+      await sleep(400);
+      const opened = Boolean(document.querySelector('[data-slot="context-menu-content"]'));
+      const items = [...document.querySelectorAll("[data-slot='context-menu-item']")].map((el) => el.textContent.trim());
+      document.querySelector('[data-slot="context-menu-content"]')
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await sleep(400);
+      return JSON.stringify({ opened, items, closed: !document.querySelector('[data-slot="context-menu-content"]') });
+    })()`),
+  );
+  checker.check(
+    "右键卡片的菜单能弹出并 Esc 关闭",
+    contextMenu.opened === true && contextMenu.closed === true && contextMenu.items.length >= 1,
+    JSON.stringify(contextMenu),
+  );
+
   const errors = cdp.pageErrors;
   checker.check("真机窗口无 JS 异常", errors.length === 0, errors.join(" | "));
 

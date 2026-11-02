@@ -19,6 +19,7 @@ import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { SlotMeter } from "@/components/theme/SlotMeter";
 import { BatchDeleteDialog } from "@/components/theme/BatchDeleteDialog";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
+import { ThemeCardMenu } from "@/components/theme/ThemeContextMenu";
 import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useFlipRows } from "@/hooks/useFlipRows";
@@ -424,15 +425,15 @@ export function MyThemesView() {
               : ["—", undefined];
 
             return (
-              <tr
-                key={theme.id}
-                data-theme-row={theme.id}
-                data-flip-key={theme.id}
-                className={cn(
-                  "border-b border-border/60 transition-[background-color] duration-(--motion-fast) ease-standard",
-                  selected ? "bg-accent" : "hover:bg-muted/50",
-                )}
-              >
+              <ThemeCardMenu key={theme.id} theme={theme} as="tr">
+                <tr
+                  data-theme-row={theme.id}
+                  data-flip-key={theme.id}
+                  className={cn(
+                    "border-b border-border/60 transition-[background-color] duration-(--motion-fast) ease-standard",
+                    selected ? "bg-accent" : "hover:bg-muted/50",
+                  )}
+                >
                 <td className="relative px-3 py-2.5">
                   {/* 选中条用整行高的 2px 竖线：accent 底色只有 3% 明度差，
                       单靠底色在深色模式下几乎看不出选中 */}
@@ -582,6 +583,7 @@ export function MyThemesView() {
                   </span>
                 </td>
               </tr>
+              </ThemeCardMenu>
             );
           })}
         </tbody>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Archive, Check, MousePointer2, ScanSearch, Trash2, TriangleAlert } from "lucide-react";
 
@@ -72,6 +72,16 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
   const stats = slotStats(theme);
   const cover = coverSlot(theme);
   const missingNames = missingSlotNames(theme, missingSlotsOf(fileGaps, theme.id));
+
+  // 右键菜单的「删除」请求（决策 65）：只应答自己这个主题，复用同一个确认框
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail;
+      if (detail?.id === theme.id) setConfirmOpen(true);
+    };
+    window.addEventListener("mousetool:request-delete", onRequest);
+    return () => window.removeEventListener("mousetool:request-delete", onRequest);
+  }, [theme.id]);
 
   // 系统自带方案没有文件可删；正在使用的主题删掉会让注册表指向空文件
   const canDelete = !theme.is_built_in && !isActive;
