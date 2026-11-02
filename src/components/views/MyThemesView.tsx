@@ -269,6 +269,19 @@ export function MyThemesView() {
                 >
                   {allSelected ? "取消全选" : "全选"}
                 </Button>
+                {/* 导出所选（决策 62）：清理前留底的工作流——勾选 → 先导出一份 → 再删除。
+                    与「导出全部」共用 export:all 忙碌键与后端重操作锁 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-batch-export
+                  title="把勾选的主题导出为 ZIP 到所选文件夹"
+                  onClick={() => void pickAndExportAll(selectedThemes.map((theme) => theme.id))}
+                  disabled={selectedCount === 0 || batchDeleting || exportingAll || pickingAll}
+                >
+                  <FolderOutput data-icon="inline-start" />
+                  {exportingAll ? "导出中…" : pickingAll ? "选择中…" : "导出所选"}
+                </Button>
                 <Button
                   size="sm"
                   variant="destructive"

@@ -79,6 +79,13 @@ export function addMockTheme(theme: CursorTheme): boolean {
   return true;
 }
 
+// 开发期把种子函数挂到 window 上：验收脚本要构造「本次会话已导入」的内存库
+//（批量导出只导 devThemes，与真机「只导我的主题」语义一致，示例数据不算）
+if (import.meta.env.DEV) {
+  (window as unknown as { __mockSeedTheme?: typeof addMockTheme }).__mockSeedTheme =
+    addMockTheme;
+}
+
 /**
  * 浏览器里模拟的「当前使用」状态（决策 24）
  *
@@ -448,9 +455,13 @@ export function mockExportTheme(_theme: CursorTheme, _destPath: string): Promise
 /** 浏览器里演示用的数据目录路径（真实路径只有 Rust 侧知道，前端禁止自行拼接） */
 export const MOCK_DATA_DIR = "C:\\Users\\demo\\AppData\\Local\\CursorStudio";
 
-/** 浏览器里的批量导出模拟：导出「已导入的 mock 主题」，数量随内存数据走 */
-export function mockExportAllThemes(destDir: string) {
-  const mine = devThemes.filter((theme) => !theme.is_built_in);
+/** 浏览器里的批量导出模拟：导出「已导入的 mock 主题」，数量随内存数据走；
+ * 传 themeIds（决策 62）只导清单内的主题 */
+export function mockExportAllThemes(destDir: string, themeIds?: string[]) {
+  const wanted = themeIds ? new Set(themeIds) : null;
+  const mine = devThemes.filter(
+    (theme) => !theme.is_built_in && (!wanted || wanted.has(theme.id)),
+  );
   const exported = mine.map((theme, index) => ({
     theme_id: theme.id,
     name: theme.name,

@@ -268,8 +268,9 @@ export interface ExportAllOutcome {
 export async function exportAllThemes(
   destDir: string,
   onProgress?: (progress: TaskProgress) => void,
+  themeIds?: string[],
 ): Promise<ExportAllOutcome> {
-  if (!inTauri) return mockExportAllThemes(destDir);
+  if (!inTauri) return mockExportAllThemes(destDir, themeIds);
 
   let unlisten: (() => void) | undefined;
   if (onProgress) {
@@ -278,7 +279,11 @@ export async function exportAllThemes(
     });
   }
   try {
-    return await invoke<ExportAllOutcome>("export_all_themes", { destDir });
+    // themeIds（决策 62）：传清单只导选中的主题；undefined = 全部「我的主题」
+    return await invoke<ExportAllOutcome>("export_all_themes", {
+      destDir,
+      themeIds: themeIds ?? null,
+    });
   } finally {
     unlisten?.();
   }

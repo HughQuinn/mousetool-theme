@@ -290,6 +290,47 @@ try {
   );
   check("删完最后一轮回到空状态", emptied);
 
+  // ---------------------------------------------------------------- 导出所选（决策 62）
+  // mock 的批量导出只导「本次会话导入的」主题（与真机「只导我的主题」一致，
+  // 示例数据不算），所以先种子两套进 devThemes，勾一套，断言只导出这一套
+  const seeded = await evaluate(
+    `(() => {
+      const seed = window.__mockSeedTheme;
+      if (!seed) return false;
+      const t = __themeStore.getState().themes[0];
+      seed({ ...t, id: "export-fixture-a", name: "导出甲", is_built_in: false });
+      seed({ ...t, id: "export-fixture-b", name: "导出乙", is_built_in: false });
+      return true;
+    })()`,
+  );
+  await evaluate(`__themeStore.getState().loadThemes()`);
+  await sleep(500);
+  await evaluate(`__themeStore.getState().setCurrentPage("mine")`);
+  await sleep(300);
+  await evaluate(`document.querySelector("[data-batch-mode]")?.click()`);
+  await sleep(300);
+  await evaluate(
+    `document.querySelector('[data-theme-row="export-fixture-a"] [role=checkbox]')?.click()`,
+  );
+  await sleep(250);
+  const exportReady = await evaluate(
+    `document.querySelector("[data-batch-export]")?.disabled ?? null`,
+  );
+  check("整理模式出现「导出所选」且勾选后就绪", seeded && exportReady === false, `seeded=${seeded}`);
+  await evaluate(`document.querySelector("[data-batch-export]").click()`);
+  const selectedExported = await waitFor(
+    `document.body.textContent.includes("已导出 1 套主题")`,
+  );
+  check(
+    "「导出所选」只导勾选的那套",
+    selectedExported === true,
+    "种子 2 套勾 1 套，toast 计数 1 证明清单过滤生效",
+  );
+  const afterExport = await evaluate(
+    `__themeStore.getState().themes.filter(t => !t.is_built_in).length`,
+  );
+  check("导出所选不增删主题", afterExport === 2, `${afterExport} 套`);
+
   check("全程无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
   ws.close();
   if (results.some((r) => !r.ok)) process.exitCode = 1;

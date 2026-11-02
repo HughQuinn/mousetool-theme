@@ -1040,6 +1040,7 @@ fn ensure_not_managed_dir(dest: &Path) -> Result<(), String> {
 
 fn export_all_in(
     dest_dir: &Path,
+    wanted: Option<&[String]>,
     progress: &mut dyn FnMut(usize, usize, &str),
 ) -> Result<ExportAllOutcome, String> {
     let (user_themes, warnings) = importer::read_user_themes();
@@ -1047,6 +1048,12 @@ fn export_all_in(
         .into_iter()
         .filter(|theme| !theme.is_built_in)
         .collect();
+    // 决策 62：传了 ID 清单就只导清单内的主题（「导出所选」）；清单外的 ID
+    // 自然落空，不需要报错——前端传的就是眼前勾选行，界面上看得见几套导几套
+    if let Some(ids) = wanted {
+        let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        themes.retain(|theme| wanted.contains(theme.id.as_str()));
+    }
     // 按名字排序：批量导出的顺序要稳定，与界面上「我的主题」的浏览顺序呼应
     themes.sort_by(|a, b| {
         a.name
@@ -1101,6 +1108,7 @@ fn export_all_in(
 pub async fn export_all_themes(
     app: AppHandle,
     dest_dir: String,
+    theme_ids: Option<Vec<String>>,
 ) -> Result<ExportAllOutcome, String> {
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1116,7 +1124,7 @@ pub async fn export_all_themes(
         }
         ensure_not_managed_dir(&dest)?;
         let emitter = emitter.clone();
-        export_all_in(&dest, &mut |current, total, name| {
+        export_all_in(&dest, theme_ids.as_deref(), &mut |current, total, name| {
             let _ = emitter.emit(
                 "export-all-progress",
                 progress::TaskProgress::new("export", current, total, name.to_string()),
@@ -1928,7 +1936,7 @@ mod tests {
         let (_b, _) = seed_exportable_theme("夜色", &[("Arrow", "b.cur", fixture_cur())]);
         let (_c, _) = seed_exportable_theme("晨光", &[("Arrow", "c.cur", fixture_cur())]);
 
-        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
         assert_eq!(outcome.exported.len(), 3, "三套全成功：{:?}", outcome.failed);
         assert!(outcome.failed.is_empty());
         assert!(outcome.warnings.is_empty());
@@ -1950,6 +1958,40 @@ mod tests {
             assert!(item.bytes > 0, "{} 要报出体积", item.file_name);
             assert_eq!(item.file_count, 1);
         }
+    }
+
+    /// 决策 62：「导出所选」传 ID 清单时只导清单内的主题；未知 ID 落空不报错
+    #[test]
+    fn 批量导出传入_id_清单时只导选中的() {
+        let root = TempDir::new("export-all-selected");
+        let _guard = root.isolate_paths();
+        let dest = root.join("导出目录");
+        fs::create_dir_all(&dest).expect("建导出目录");
+
+        let (a, _) = seed_exportable_theme("夜色", &[("Arrow", "a.cur", fixture_cur())]);
+        let (_b, _) = seed_exportable_theme("晨光", &[("Arrow", "b.cur", fixture_cur())]);
+        let (c, _) = seed_exportable_theme("暮色", &[("Arrow", "c.cur", fixture_cur())]);
+
+        let outcome = export_all_in(&dest, Some(&[a.id.clone(), c.id.clone()]), &mut |_, _, _| {})
+            .expect("导出所选整体不失败");
+        let mut names: Vec<&str> = outcome
+            .exported
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["夜色", "暮色"], "只导清单内的两套：{:?}", outcome.exported);
+        assert!(outcome.failed.is_empty());
+        assert!(!dest.join("晨光.zip").is_file(), "清单外的主题不应落盘");
+
+        // 清单里全是不存在的 ID：导出 0 套而不报错（不存在的主题无需点名）
+        let empty = export_all_in(&dest, Some(&[Uuid::new_v4().to_string()]), &mut |_, _, _| {})
+            .expect("未知 ID 不该报错");
+        assert!(empty.exported.is_empty() && empty.failed.is_empty());
+
+        // None 保持原语义：全部导出
+        let all = export_all_in(&dest, None, &mut |_, _, _| {}).expect("全量导出不失败");
+        assert_eq!(all.exported.len(), 3, "三套全成功：{:?}", all.failed);
     }
 
     /// 部分成功：文件缺口的那套进 failed，好主题照常落盘；管理目录拒绝导出
@@ -1978,7 +2020,7 @@ mod tests {
 
         let dest = root.join("out");
         fs::create_dir_all(&dest).expect("建导出目录");
-        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
         assert_eq!(outcome.exported.len(), 1, "好主题照常落盘");
         assert_eq!(outcome.exported[0].theme_id, good.id);
         assert_eq!(outcome.failed.len(), 1, "文件缺口的那套进 failed");

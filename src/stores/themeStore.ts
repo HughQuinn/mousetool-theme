@@ -197,9 +197,10 @@ interface ThemeStore {
   /**
    * 批量导出「我的主题」到指定目录（决策 34）
    *
+   * `themeIds`（决策 62）：传清单只导选中的主题，undefined = 全部。
    * 返回结果供界面续接（打开目录等）；null = 没执行（重复点击或失败）。
    */
-  exportAllThemes: (destDir: string) => Promise<ExportAllOutcome | null>;
+  exportAllThemes: (destDir: string, themeIds?: string[]) => Promise<ExportAllOutcome | null>;
   /** 清空最近使用记录；返回清掉的条数，null = 没执行（重复点击或失败） */
   clearHistory: () => Promise<number | null>;
   /** 读一次数据目录路径（幂等，拿到就不再请求） */
@@ -682,14 +683,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       searchQuery: "",
     })),
 
-  exportAllThemes: async (destDir) => {
+  exportAllThemes: async (destDir, themeIds) => {
     const key = actionBusyKey("export", "all");
     if (get().busy[key]) return null;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true), exportAllProgress: null }));
     try {
       const outcome = await apiExportAllThemes(destDir, (progress) => {
         if (get().busy[key]) set({ exportAllProgress: progress });
-      });
+      }, themeIds);
       const parts = [`${outcome.exported.length} 套主题`];
       if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} 套失败`);
       if (outcome.warnings.length > 0) parts.push(`${outcome.warnings.length} 条提示`);
