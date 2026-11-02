@@ -23,6 +23,7 @@
 | `verify_import_duplicate.mjs` | 决策 47：同内容包二次导入 `duplicate_of` 点名 + warnings 人话版、不拦截；内容不同不误报 | 脚本自造（复制 `C:WindowsCursorsaero_arrow.cur`） |
 | `verify_iterate_features.mjs` | 决策 53/54/55：`apply_counts` 按事件流真机派生并上窗口（手写隔离事件流，不碰注册表）；`restore_from_trash` 的 `asCopy` 新 UUID 落盘 + `theme.json` 改写 +「（副本）」、同 ID 冲突时普通恢复仍拒绝；轮换设置真机落盘、越界拒绝、设置卡渲染。**全程不调 `apply_theme`**（真机注册表不隔离，改了就是用户的真实光标） | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur` + 手写 v2 `history.json`、按原 ID 重建同 ID 主题） |
 | `verify_ani_blur.mjs` | 决策 60：真实 OS 焦点迁移（激活桌面夺走焦点）下 AniPlayer 失焦停表（drawImage 计数冻结为 0）、重新聚焦续播；只读系统方案预览，不碰注册表与用户主题 | 无需造输入（PowerShell AppActivate 切焦点） |
+| `verify_theme_meta.mjs` | 决策 61：`rename_theme` 的名称 + 描述补丁语义在真实 IPC 下可用——改名+描述一起生效、磁盘 `theme.json` 落盘、只改描述时名称与导入时间不动、空串清除、省略参数补丁语义、超长拒绝、列表重读一致 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_cursor_size.mjs` | 决策 51：光标大小注册表路线的真机验证——`CursorBaseSize` / `AccessibilityCursorSize` 写入 + SPI 后实测光标位图不缩放，**假设被证伪**（退出码 1 = 假设未证实，本身是有效结论） | 无需造输入（reg.exe + PowerShell 直测，整键备份 + 逐值还原） |
 
 三个脚本都会：启动隔离应用 → CDP 直连 `__TAURI_INTERNALS__.invoke` 断言 →
@@ -39,6 +40,7 @@ node scripts/real_machine/verify_batch_delete.mjs
 node scripts/real_machine/verify_import_duplicate.mjs
 node scripts/real_machine/verify_iterate_features.mjs
 node scripts/real_machine/verify_ani_blur.mjs
+node scripts/real_machine/verify_theme_meta.mjs
 npm run dev:bg stop
 ```
 

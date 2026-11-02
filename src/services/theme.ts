@@ -203,13 +203,23 @@ export function emptyTrash(): Promise<EmptyTrashOutcome> {
 }
 
 /**
- * 对应 Rust 命令 `rename_theme`：只改显示名，返回更新后的主题
+ * 对应 Rust 命令 `rename_theme`：只改显示名与描述（决策 61），返回更新后的主题
  *
- * 浏览器环境直接本地改名，让开发时也能走通完整交互（不会持久化）。
+ * `newDescription` 与 Rust 的 `Option<String>` 对齐：`undefined` = 不动描述，
+ * 字符串（含空串）= 整体替换。浏览器环境直接本地改名，让开发时也能走通完整交互
+ * （不会持久化）。
  */
-export function renameTheme(theme: CursorTheme, newName: string): Promise<CursorTheme> {
-  if (!inTauri) return mockRenameTheme(theme, newName);
-  return invoke<CursorTheme>("rename_theme", { themeId: theme.id, newName });
+export function renameTheme(
+  theme: CursorTheme,
+  newName: string,
+  newDescription?: string,
+): Promise<CursorTheme> {
+  if (!inTauri) return mockRenameTheme(theme, newName, newDescription);
+  return invoke<CursorTheme>("rename_theme", {
+    themeId: theme.id,
+    newName,
+    newDescription: newDescription ?? null,
+  });
 }
 
 /** `export_theme` 的返回值：跳过的槽位要说清，否则用户不知道少了什么 */

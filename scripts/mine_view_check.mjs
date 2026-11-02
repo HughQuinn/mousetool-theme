@@ -245,6 +245,82 @@ try {
     JSON.stringify({ gappedRows, gapHinted }),
   );
 
+  // ---- 第三段：描述可编辑（决策 61，检查器头部） ----
+  await goto("http://localhost:1420/");
+  await evaluate(
+    `globalThis.__themeStore.getState().selectTheme("9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11")`,
+  );
+  await sleep(300);
+  const descShown = await evaluate(
+    `(() => {
+      const aside = document.querySelector('[aria-label="主题详情"]');
+      return {
+        text: aside?.innerText?.includes("导入自 neon-night.zip") ?? false,
+        pencil: Boolean(aside?.querySelector('[aria-label="编辑描述"]')),
+      };
+    })()`,
+  );
+  check("检查器头部显示描述与编辑入口", descShown.text && descShown.pencil, JSON.stringify(descShown));
+
+  // 点铅笔 → 输入框 → 输入 → Enter 保存；store 与界面都更新
+  await evaluate(
+    `document.querySelector('[aria-label="主题详情"] [aria-label="编辑描述"]')?.click()`,
+  );
+  await sleep(200);
+  const typed = await evaluate(
+    `(() => {
+      const input = document.querySelector('[aria-label="主题详情"] input[aria-label="主题描述"]');
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      setter.call(input, "霓虹赛博之夜");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      return true;
+    })()`,
+  );
+  await sleep(300);
+  const descSaved = await evaluate(
+    `(() => {
+      const t = globalThis.__themeStore.getState().themes.find(x => x.id === "9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11");
+      const aside = document.querySelector('[aria-label="主题详情"]');
+      return { stored: t?.description, shown: aside?.innerText?.includes("霓虹赛博之夜") ?? false };
+    })()`,
+  );
+  check(
+    "描述保存进 store 并上界面",
+    typed && descSaved.stored === "霓虹赛博之夜" && descSaved.shown,
+    JSON.stringify({ typed, descSaved }),
+  );
+
+  // Esc 取消：改草稿不落库
+  await evaluate(
+    `document.querySelector('[aria-label="主题详情"] [aria-label="编辑描述"]')?.click()`,
+  );
+  await sleep(200);
+  const cancelled = await evaluate(
+    `(() => {
+      const input = document.querySelector('[aria-label="主题详情"] input[aria-label="主题描述"]');
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      setter.call(input, "不该被保存");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      const t = globalThis.__themeStore.getState().themes.find(x => x.id === "9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11");
+      return t.description === "霓虹赛博之夜";
+    })()`,
+  );
+  check("Esc 取消不保存草稿", cancelled === true);
+
+  // 系统方案没有编辑入口
+  await evaluate(`globalThis.__themeStore.getState().selectTheme("sys_windows_default")`);
+  await sleep(300);
+  check(
+    "系统方案不出现描述编辑入口",
+    await evaluate(
+      `!document.querySelector('[aria-label="主题详情"] [aria-label="编辑描述"]')`,
+    ),
+  );
+
   const errors = pageErrors.length;
   check("运行期无 JS 异常", errors === 0, `${errors} 条`);
 } catch (err) {

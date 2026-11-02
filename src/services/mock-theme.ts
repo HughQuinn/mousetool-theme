@@ -428,8 +428,17 @@ export function mockEmptyTrash(): Promise<EmptyTrashOutcome> {
   return Promise.resolve({ removed, failed: [] });
 }
 
-export function mockRenameTheme(theme: CursorTheme, newName: string): Promise<CursorTheme> {
-  return Promise.resolve({ ...theme, name: newName });
+export function mockRenameTheme(
+  theme: CursorTheme,
+  newName: string,
+  newDescription?: string,
+): Promise<CursorTheme> {
+  return Promise.resolve({
+    ...theme,
+    name: newName,
+    // 与 Rust 的 Option 补丁语义一致：undefined 不动，字符串（含空串）整体替换
+    description: newDescription === undefined ? theme.description : newDescription.trim(),
+  });
 }
 
 export function mockExportTheme(_theme: CursorTheme, _destPath: string): Promise<never> {

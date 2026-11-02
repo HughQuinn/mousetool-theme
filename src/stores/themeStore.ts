@@ -192,7 +192,7 @@ interface ThemeStore {
     entry: TrashEntry,
     options?: { asCopy?: boolean },
   ) => Promise<boolean>;
-  renameTheme: (id: string, newName: string) => Promise<void>;
+  renameTheme: (id: string, newName: string, newDescription?: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
   /**
    * 批量导出「我的主题」到指定目录（决策 34）
@@ -615,12 +615,18 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  renameTheme: async (id, newName) => {
+  renameTheme: async (id, newName, newDescription) => {
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
 
     const name = newName.trim();
-    if (!name || name === theme.name) return;
+    // 补丁语义（决策 61）：描述 undefined = 不动；值都没变就不发请求
+    if (!name) return;
+    if (newDescription === undefined) {
+      if (name === theme.name) return;
+    } else if (name === theme.name && newDescription.trim() === theme.description) {
+      return;
+    }
 
     if (theme.is_built_in) {
       toast.error("系统自带方案不能改名");
@@ -631,14 +637,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     if (get().busy[key]) return;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
-      const updated = await apiRenameTheme(theme, name);
+      const updated = await apiRenameTheme(theme, name, newDescription);
       set((state) => ({
         themes: state.themes.map((t) => (t.id === id ? updated : t)),
       }));
       // 正在使用的主题改名后，注册表里的 SchemeName 还是旧名，需重新应用才同步
       const hint =
         get().activeThemeId === id ? "系统设置里的方案名会在下次应用时更新" : undefined;
-      toast.success(`已改名为「${updated.name}」`, hint);
+      toast.success(`已更新「${updated.name}」`, hint);
     } catch (err) {
       console.error("改名失败：", err);
       toast.error("改名失败", readableError(err));
