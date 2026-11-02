@@ -83,6 +83,27 @@ try {
     JSON.stringify(contextMenu),
   );
 
+  // 方向键导航（决策 66）：真实窗口里发真实按键（CDP Input 域），聚焦卡片移动
+  const nav = await cdp.evaluate(
+    `document.querySelector("[data-theme-card]")?.focus(),
+     document.activeElement?.getAttribute("data-theme-card") ?? null`,
+  );
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const afterKey = await cdp.evaluate(
+    `document.activeElement?.getAttribute("data-theme-card") ?? null`,
+  );
+  checker.check(
+    "方向键在真实窗口里移动卡片焦点",
+    Boolean(nav) && Boolean(afterKey) && nav !== afterKey,
+    `${nav} → ${afterKey}`,
+  );
+
   const errors = cdp.pageErrors;
   checker.check("真机窗口无 JS 异常", errors.length === 0, errors.join(" | "));
 

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { LayoutGrid, SearchX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,17 @@ import { GalleryCard } from "@/components/theme/GalleryCard";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { filterByName, splitBySource } from "@/lib/themes";
 import { useThemeStore } from "@/stores/themeStore";
+
+/** 第一行的卡片数 = 当前列数（auto-fill 布局下列数随窗宽变，不能写死） */
+function columnCount(cards: HTMLButtonElement[]): number {
+  const firstTop = cards[0].getBoundingClientRect().top;
+  let count = 0;
+  for (const card of cards) {
+    if (Math.abs(card.getBoundingClientRect().top - firstTop) < 1) count += 1;
+    else break;
+  }
+  return Math.max(1, count);
+}
 
 /**
  * 主题图库：逛
@@ -25,6 +36,33 @@ export function GalleryView() {
   const selectedId = useThemeStore((s) => s.selection.gallery);
   const selectTheme = useThemeStore((s) => s.selectTheme);
   const { picking, pick } = useImportTheme();
+  const pageRef = useRef<HTMLDivElement>(null);
+
+  // 方向键网格导航（决策 66）：←→ 移一张、↑↓ 移一行、Home/End 首尾，
+  // 跨「系统方案 / 我的主题」两段连续漫游。Tab 语义不动（仍逐卡穿越），
+  // 方向键是二维移动的增强；列数按第一行实测，不写死。
+  const handleGridKeyDown = (event: React.KeyboardEvent) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    const cards = Array.from(
+      pageRef.current?.querySelectorAll<HTMLButtonElement>("[data-theme-card]") ?? [],
+    );
+    if (cards.length === 0) return;
+    const current = cards.findIndex((card) => card === document.activeElement);
+    const cols = columnCount(cards);
+    let target: number;
+    switch (event.key) {
+      case "ArrowRight": target = (current < 0 ? 0 : current + 1); break;
+      case "ArrowLeft": target = (current < 0 ? 0 : current - 1); break;
+      case "ArrowDown": target = (current < 0 ? 0 : current + cols); break;
+      case "ArrowUp": target = (current < 0 ? 0 : current - cols); break;
+      case "Home": target = 0; break;
+      default: target = cards.length - 1; break; // End
+    }
+    event.preventDefault();
+    cards[Math.max(0, Math.min(cards.length - 1, target))]?.focus();
+  };
 
   // 派生数据必须是纯函数 + useMemo：写进 selector 会每次返回新对象，
   // useSyncExternalStore 判定快照变化 → 无限重渲染白屏
@@ -89,7 +127,12 @@ export function GalleryView() {
     ));
 
   return (
-    <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-5">
+    <div
+      ref={pageRef}
+      onKeyDown={handleGridKeyDown}
+      data-gallery-grid
+      className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-5"
+    >
       {groups.builtIn.length > 0 && (
         <section className="mb-7 last:mb-0">
           <SectionLabel label="系统方案" count={groups.builtIn.length} unit="个" />
