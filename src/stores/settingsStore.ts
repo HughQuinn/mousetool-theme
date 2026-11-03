@@ -34,6 +34,16 @@ function announceSettingsWarnings(warnings: string[]) {
 }
 
 /**
+ * 设置写入串行化
+ *
+ * 后端每次 `update_settings` 都是整份读改写，连续改两个开关时后一次不能
+ * 覆盖前一次；`seq` 只让最新一次响应更新界面，旧响应晚到不能把新选择顶回去。
+ * 队列里的失败不阻塞后续补丁。
+ */
+let settingsPatchSeq = 0;
+let settingsPatchChain: Promise<void> = Promise.resolve();
+
+/**
  * 行为设置（设置 → 通用 / 快捷键）
  *
  * 状态读 Rust 的 settings.json（开发模式是 localStorage 顶上）；写操作
@@ -160,13 +170,25 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   patchSettings: async (patch) => {
     // 乐观更新：开关 / 分段控件要先动起来（点了没反应比慢更让人怀疑坏了），
     // 失败再回滚旧值并重读真实状态，别让界面停在猜出来的值上
+    const seq = ++settingsPatchSeq;
     const previous = get().settings;
     if (previous) {
       set({ settings: { ...previous, ...patch } });
     }
+
+    // 串行写：连续改设置时按点击顺序落盘，避免后一次读改写被前一次覆盖；
+    // 旧响应即便晚到，也由上面的 seq 挡住
+    const task = settingsPatchChain.then(() => apiUpdateSettings(patch));
+    settingsPatchChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
-      set({ settings: await apiUpdateSettings(patch) });
+      const snapshot = await task;
+      if (seq === settingsPatchSeq) set({ settings: snapshot });
     } catch (err) {
+      // 已有更新的补丁在途时，旧补丁失败不回滚界面——否则会把新选择一起抹掉
+      if (seq !== settingsPatchSeq) return;
       console.error("更新设置失败：", err);
       toast.error("设置失败", readableError(err));
       set({ settings: previous });
