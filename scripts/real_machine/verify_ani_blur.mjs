@@ -23,30 +23,51 @@ import {
 const { appdata } = prepareRoot();
 const checker = createChecker();
 
-/** 用 PowerShell 的 Shell.Application 把前台焦点切到指定窗口（标题前缀匹配） */
-function activateWindow(title) {
-  const script = `
-    $shell = New-Object -ComObject Shell.Application
-    $shell.Windows() | Out-Null
-    (New-Object -ComObject WScript.Shell).AppActivate(${JSON.stringify(title)}) | Out-Null
+/** 用 Win32 把前台焦点切到指定标题的窗口（空标题 = 任意其它应用窗口）
+ *
+ * `WScript.Shell.AppActivate` 在自动化进程里经常被 Windows 前台锁拒绝
+ * （连续跑多个验证脚本时更常见）；`AttachThreadInput` + `SetForegroundWindow`
+ * 是绕过该限制的既知手法，失焦与还焦两个方向都走它。
+ */
+function forceForeground(title) {
+  const ps = `
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class FgWin {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+}
+"@
+    $target = [FgWin]::FindWindow($null, ${JSON.stringify(title)})
+    if ($target -eq [IntPtr]::Zero) {
+      $other = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -ne 'mousetool-theme' } | Select-Object -First 1
+      if ($other) { $target = $other.MainWindowHandle }
+    }
+    if ($target -ne [IntPtr]::Zero) {
+      [FgWin]::ShowWindow($target, 9) | Out-Null
+      $fg = [FgWin]::GetForegroundWindow()
+      $procId = 0
+      $fgThread = [FgWin]::GetWindowThreadProcessId($fg, [ref]$procId)
+      $cur = [FgWin]::GetCurrentThreadId()
+      [FgWin]::AttachThreadInput($cur, $fgThread, $true) | Out-Null
+      [FgWin]::SetForegroundWindow($target) | Out-Null
+      [FgWin]::AttachThreadInput($cur, $fgThread, $false) | Out-Null
+    }
   `;
-  execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], {
     stdio: "ignore",
   });
 }
 
-/** 激活桌面（Progman），夺走应用窗口的 OS 焦点；先发一个 Alt 释放前台锁 */
+/** 激活桌面（Progman），夺走应用窗口的 OS 焦点 */
 function focusDesktop() {
-  execFileSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "$wsh = New-Object -ComObject WScript.Shell; $wsh.SendKeys('%'); $wsh.AppActivate('Program Manager') | Out-Null",
-    ],
-    { stdio: "ignore" },
-  );
+  forceForeground("Program Manager");
 }
 
 let app = null;
@@ -128,15 +149,21 @@ try {
   checker.check("失焦后动画停表（不再绘制）", drawsBlurred === 0, `800ms 内绘制 ${drawsBlurred} 帧`);
 
   // 把焦点还给应用窗口，动画应续播。AppActivate 可能被系统的前台锁定
-  // 拒绝（连续跑多个验证脚本时更常见），轮询页面内 hasFocus 确认真的拿回；
-  // 降级档（OS 焦点仍驻留应用）下合成 focus 事件会被 Chromium 的真实焦点
-  // 状态干扰，续播方向只在 OS 档断言（本会话早前 OS 级运行 6/6 已证）
+  // 拒绝（连续跑多个验证脚本时更常见）；优先用 CDP 的 Page.bringToFront
+  // ——由应用自己的 WebView 发起前台切换，不受自动化进程的前台锁限制；
+  // 轮询页面内 hasFocus 确认真的拿回。降级档（OS 焦点仍驻留应用）下合成
+  // focus 事件会被 Chromium 的真实焦点状态干扰，续播方向只在 OS 档断言
   if (osLevel) {
     let refocused = false;
     for (let i = 0; i < 6 && !refocused; i++) {
-      activateWindow("鼠标主题工具");
-      await sleep(300);
+      await cdp.send("Page.bringToFront").catch(() => {});
+      await sleep(200);
       refocused = (await cdp.evaluate(`document.hasFocus()`)) === true;
+      if (!refocused) {
+        forceForeground("鼠标主题工具");
+        await sleep(300);
+        refocused = (await cdp.evaluate(`document.hasFocus()`)) === true;
+      }
     }
     checker.check("焦点已还给应用窗口", refocused === true);
     await cdp.evaluate(`window.__draws = 0`);

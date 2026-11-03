@@ -5,13 +5,22 @@
 // - 还原默认 → 挂起（不被立刻覆盖）；下次深浅色翻转恢复接管
 // - 关闭开关 → 深浅色翻转不再切
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const URL_TO_OPEN = process.argv[2] ?? "http://localhost:1420";
 const OUT_DIR = process.env.TEMP ?? ".";
 const PORT = 9233;
+
+// 固定 profile 会带着上一轮末段重新打开的「自动切换已开启」设置，污染默认态断言：每轮清一次；
+// 清不掉（上一轮 Edge 还没退干净）就另起一个
+let PROFILE = join(OUT_DIR, "edge_auto_switch_profile");
+try {
+  rmSync(PROFILE, { recursive: true, force: true });
+} catch {
+  PROFILE = join(OUT_DIR, `edge_auto_switch_profile_${process.pid}`);
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,7 +30,7 @@ const edge = spawn(EDGE, [
   "--force-device-scale-factor=1",
   "--window-size=1200,800",
   `--remote-debugging-port=${PORT}`,
-  "--user-data-dir=" + join(OUT_DIR, "edge_auto_switch_profile"),
+  "--user-data-dir=" + PROFILE,
   "about:blank",
 ]);
 
