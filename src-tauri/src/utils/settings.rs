@@ -18,11 +18,17 @@ use serde::{Deserialize, Serialize};
 use crate::utils::{limits, paths};
 
 /// 关闭主窗口时的行为
+///
+/// 拦截在 Rust 侧（`lib.rs` 的关窗事件），三种行为各自的出口：
+/// exit 不拦；tray 藏窗；ask 发 `close-ask` 事件交给前端弹询问框（决策 57）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseBehavior {
-    /// 关窗口即退出进程（默认）
+    /// 关窗口先弹询问（默认，决策 57）：缩到托盘还是退出由用户当场选，
+    /// 勾「不再询问」后这次的选择经 `update_settings` 成为新的关闭行为
     #[default]
+    Ask,
+    /// 关窗口即退出进程
     Exit,
     /// 关窗口缩到托盘，进程继续跑，托盘里能叫回窗口或退出
     Tray,
@@ -31,6 +37,7 @@ pub enum CloseBehavior {
 impl CloseBehavior {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Ask => "ask",
             Self::Exit => "exit",
             Self::Tray => "tray",
         }
@@ -39,9 +46,12 @@ impl CloseBehavior {
     /// 前端传来的字符串 → 枚举；不给静默默认，传错了要说出来
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
+            "ask" => Ok(Self::Ask),
             "exit" => Ok(Self::Exit),
             "tray" => Ok(Self::Tray),
-            other => Err(format!("不认识的关闭行为「{other}」（应为 exit 或 tray）")),
+            other => Err(format!(
+                "不认识的关闭行为「{other}」（应为 ask、exit 或 tray）"
+            )),
         }
     }
 }
@@ -93,7 +103,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            close_behavior: CloseBehavior::Exit,
+            close_behavior: CloseBehavior::Ask,
             themes_dir: None,
             auto_check_update: true,
             shortcuts_enabled: true,
@@ -315,7 +325,7 @@ mod tests {
         let _ = fs::remove_file(&missing);
 
         let loaded = load_from(&missing);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(loaded.warnings.is_empty(), "第一次运行不该报警");
     }
 
@@ -328,7 +338,7 @@ mod tests {
         fs::write(&broken, "{ 不是 json").expect("写坏文件");
 
         let loaded = load_from(&broken);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(loaded.settings.auto_check_update, "默认开启自动检查");
         assert_eq!(loaded.warnings.len(), 1, "损坏要能被界面说明");
         assert!(
@@ -376,7 +386,7 @@ mod tests {
         fs::write(&path, raw).expect("写超大设置");
 
         let loaded = load_from(&path);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(
             loaded.warnings[0].contains("上限"),
             "警告要说清尺寸超限：{}",
@@ -551,10 +561,15 @@ mod tests {
     }
 
     #[test]
-    fn 关闭行为的字符串解析只认两个值() {
+    fn 关闭行为的字符串解析只认三个值() {
+        assert_eq!(CloseBehavior::parse("ask").unwrap(), CloseBehavior::Ask);
         assert_eq!(CloseBehavior::parse("exit").unwrap(), CloseBehavior::Exit);
         assert_eq!(CloseBehavior::parse("tray").unwrap(), CloseBehavior::Tray);
         assert!(CloseBehavior::parse("minimize").is_err());
+        assert_eq!(CloseBehavior::Ask.as_str(), "ask");
         assert_eq!(CloseBehavior::Tray.as_str(), "tray");
+        // 新装默认是「每次询问」（决策 57）；已有用户的 settings.json 存的是
+        // 显式值，不受默认调整影响
+        assert_eq!(AppSettings::default().close_behavior, CloseBehavior::Ask);
     }
 }

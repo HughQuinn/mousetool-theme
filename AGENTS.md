@@ -5,7 +5,7 @@
 > 原则：**事实以代码为准**。本文件与代码不一致时改本文件，不要改代码迁就文档；更不要把没实现的东西写成已支持。
 
 **技术栈**：Tauri 2 + React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand 5 + Rust。
-**现状**：功能已跑通，41 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
+**现状**：功能已跑通，43 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
 
 ## 先读哪份（冲突时从上往下取）
 
@@ -21,7 +21,7 @@
 
 ## 职责边界（同一仓库，不是独立进程；明细见手册）
 
-- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。提示口径：toast 只报事件不报状态——设置开关成功静默、注册表类操作成功也弹（决策 56）。
+- **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四视图（含设置）+ 检查器 + 启动开屏遮罩（`SplashOverlay`，仅 `inTauri` 渲染，浏览器 mock 不渲染，决策 58）；组件不直接 `invoke`，走 store action，`services/` 是唯一 invoke 出口，mock 全住 `mock*.ts`（决策 50）。提示口径：toast 只报事件不报状态——设置开关成功静默、注册表类操作成功也弹（决策 56）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排；错误一律 `Result<T, String>` 且是**用户能照着行动**的中文；I/O 全走 `spawn_blocking`，重操作取 `utils/ops.rs` 锁并发 `*-progress` 事件；入参先过 `utils/validation.rs`，归档读取只走 `utils/limits.rs`。
 - **Theme**（`utils/importer.rs` 等）：zip / `.themepack` / `.theme` / 文件夹四入口一条导入链路；`.inf` 说明书映射优先于文件名推断；导出 zip 附带通用 `.inf`；`theme.json` 磁盘存相对路径、运行时 `resolve_theme` 拼绝对；存储目录迁移与文件完整性体检见手册。
 - **Trash**（`utils/trash.rs`）：删除即软删除进 `trash\<条目 UUID>\`（条目 ID 与主题 ID 分开）；上限 20 套 / 512 MB，超限自动清最早；恢复遇同 ID 被占可改「存为副本」（新 UUID、名称加「（副本）」，决策 54）。
@@ -29,8 +29,8 @@
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码，不转 GIF。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **日志**（`utils/log.rs`）：数据根 `logs\mousetool.log`，512KB 轮转连当前共 3 份，写失败一律静默；非测试代码禁止 `eprintln!`。
-- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；托盘最近主题快速切换（决策 30）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
-- **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
+- **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` Rust 与前端共用；关闭行为三态——ask（每次询问，新装默认）/ tray / exit，关窗拦截在 Rust：tray 藏窗、ask 发 `close-ask` 事件由前端 `CloseAskDialog` 弹询问框（决策 57）；托盘存在规则：tray 常驻、ask 藏窗期间、exit 从不（决策 30 的最近主题快速切换照旧），「藏窗期间」从窗口露面后起算（`EVER_SHOWN`，启动期等待显示不算，决策 58）；主窗 `visible: false` 起步，开屏遮罩挂载发 `splash-ready` 事件、Rust 统一走 `tray::show_window` 亮窗 + 10s 兜底强制显示（决策 58）；自动切换 / 光标守护 / 自动备份 / 定时切换 / 定时轮换的逻辑都在前端 `lib/*.ts`，事件驱动不轮询（决策 25/29/32/33/55；轮换是优先级最低的自动行为，前两者开启时让位）。
+- **系统集成**（`utils/integration.rs`）：单实例互斥、`--import` 转交、右键菜单注册（决策 12/41）；**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量；二次启动唤回隐藏窗走命名事件（第二实例 `SetEvent` 即退，首实例守护线程在主线程执行 show；跨进程 ShowWindow 会静默失效，真机实证，决策 57）。
 - **Integration**（`models/` ↔ `types/`）：前后端字段逐个同名 `snake_case`，不做驼峰转换。
 - **安装器**（`src-tauri/installer/` + `tauri.conf.json` 的 `bundle` 段）：NSIS 整窗自绘模板；坑位密集（`SetCtlColors` 字面量、`;` 逐行写、BOM、makensis 工作目录等），**动它之前先读手册「安装器」一节**。
 
@@ -60,13 +60,14 @@
 **① 槽位 15 个，顺序固定**
 唯一来源 `utils/registry.rs::SLOT_DEFS`，完整表见决策记录「决策 3」。键名别照系统设置里的显示名猜：是 `Crosshair`（不是 Cross），另有 `NWPen`、`UpArrow`。短名（`no` / `ns` / `we` / `up`）只能做**精确匹配**，放进包含匹配会撞 `normal`、`upload`。
 
-**② 41 个 Tauri 命令**
+**② 43 个 Tauri 命令**
 完整清单与契约见架构设计 §5 表格，逐条易错点见手册；最容易记错的：
 - 没有 `list_themes`（是 `get_all_themes`）；没有 `create_custom_theme`（未实现）。
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，只给 ID 拿不到它的文件。
 - `get_active_state` 是聚焦用的轻量重查（决策 24）：不取 `ops` 锁；失败直接 `Err`，前端静默保留旧状态。
 - `delete_theme` 是**软删除**（决策 26）；`delete_from_trash` / `empty_trash` 才真正删文件。
 - `update_settings` 是**补丁语义**；`import_backup` 是合并恢复不覆盖已有；`restore_theme_from_backup` 只追加一套主题。
+- `hide_window_to_tray` / `exit_app` 只服务关窗询问（决策 57）：前者藏窗 + 按需补托盘，后者结束进程；`close-ask` 事件在 Rust 关窗拦截里发、页面没就绪会丢。
 - 除纯路径计算的 `get_data_dir` 外，所有命令 `async` + `spawn_blocking`；重操作取 `ops::try_begin` 锁（第二个重操作**立刻失败**，不要改成排队），只读命令不取锁。
 
 **③ 注册表写入范围**
@@ -85,7 +86,7 @@
 7. 删改类命令必须按规范 UUID 校验（`validation::is_canonical_uuid`，要求 `to_string()` 与原文完全一致）——`theme_dir(id)` 是字符串拼接，传 `../` 能越出数据目录。
 8. 多来源必须部分成功：注册表读不到不能让用户主题一起消失，失败进 `warnings`。
 9. 新增依赖需单独决策并记入决策记录（现有能力为何不够 / 手写成本 / 安装包与供应链代价），默认不加；Toast/浮层用 `@base-ui/react` 自封装，不引 sonner / radix（决策 6/27）。
-10. 动效只写 `duration-(--motion-*)` + `ease-standard/ease-exit`，禁裸数字时长、禁 `transition-all`。**唯一例外 Toast 倒计时条**：时长=toast timeout（内联注入）、缓动必须 `linear` —— 它是剩余时间的读数，改缓动=读数失真（详见 motion.md §2）。
+10. 动效只写 `duration-(--motion-*)` + `ease-standard/ease-exit/ease-spring`，禁裸数字时长、禁 `transition-all`；按钮按压的两段曲线（按下跟手 fast、松开 spring 回弹）集中写在 App.css 的 `motion-press`——Tailwind 的统一时长类写不出按属性分曲线（决策 59）。**唯一例外 Toast 倒计时条**：时长=toast timeout（内联注入）、缓动必须 `linear` —— 它是剩余时间的读数，改缓动=读数失真（详见 motion.md §2）。
 11. zustand selector **不能返回新对象**（`filter`/`map`/字面量）→ 无限重渲染白屏；派生数据用纯函数 + `useMemo`。
 12. 后台起 dev server 只用 `npm run dev:bg`，且**启动与验证写进同一条命令**；禁止 `npm run dev | head`（管道一关 EPIPE 直接杀死 vite）。
 13. 可滚动容器一律加 `scroll-thin`：6px、轨道透明、拇指**平时完全隐形**、指针进入容器才浮出（`::-webkit-scrollbar`）。**别用 `scrollbar-width: thin`**——Chromium 里它仍走经典样式（带箭头、常显），在 320px 面板里会被当成进度条；也别自绘轨道或改滚动手感。
@@ -105,6 +106,7 @@
 27. 保存当前光标是**复制**：只读注册表当前值、复制到新的主题目录并写相对路径，不改系统光标目录、不写 `Schemes`；有槽位没抄全时不得自动应用（否则会把没抄到的非空槽位写成空字符串）（决策 28）。
 28. 光标守护只事件驱动：默认关闭；启动检查要等设置与主题列表就绪且注册表读取成功；运行期只处理 `active_external`，不抢已知主题与系统默认；目标必须仍在主题库里；复用 `applyTheme`，不轮询注册表、不写 `Schemes`、不做后台服务（决策 29）。
 29. 备份单主题恢复只做追加：目标 ID 已存在必须拒绝且不碰原目录；只解压请求的那套主题，不合并使用记录、不改设置；失败清理本次新建目录；旧绝对路径必须按主题 id / 文件名映射后再落相对路径；部分缺文件恢复后必须把缺口写进 `warnings`，全部槽位缺文件必须拒绝（决策 34）。
+30. 主窗 `visible: false` 起步（`tauri.conf.json`），由 `SplashOverlay` 挂载时发的 `splash-ready` 事件唤醒、Rust 统一走 `tray::show_window` 显示——别把 `visible` 改回 `true`（先白窗后遮罩的空档会回来），别绕开 `show_window` 另写显示（ask 托盘判定依赖它置 `EVER_SHOWN`），`lib.rs` 的 10s 兜底强制显示不能删（前端起不来时不能无窗）（决策 58）。
 
 ---
 
@@ -138,7 +140,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 界面/动效脚本跑在浏览器里、走 mock，不写系统光标；**必须与 dev server 同一条命令**（各脚本验收内容见手册）：
 
 ```powershell
-node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/trash_copy_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/rotate_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/context_menu_check.mjs; node scripts/keyboard_nav_check.mjs; node scripts/palette_check.mjs; node scripts/dev_bg.mjs stop
+node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/trash_copy_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/rotate_check.mjs; node scripts/backup_content_check.mjs; node scripts/backup_verify_check.mjs; node scripts/duplicate_check.mjs; node scripts/maintenance_check.mjs; node scripts/batch_check.mjs; node scripts/scheme_import_check.mjs; node scripts/mine_view_check.mjs; node scripts/context_menu_check.mjs; node scripts/keyboard_nav_check.mjs; node scripts/palette_check.mjs; node scripts/close_ask_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`），数据根指向临时目录，不备份 / 还原用户设置。

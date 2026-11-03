@@ -65,11 +65,14 @@
 | 54 | 回收站恢复为副本 | `restore_from_trash` 增加可选 `asCopy`：目标 ID 已被占用时不再拒绝，分配新 UUID 复制落盘、`theme.json` 的 id 与目录名同步改写、名称加「（副本）」（40 字截断）；普通恢复的拒绝语义不变 |
 | 55 | 定时轮换主题 | 按固定间隔在「我的主题」里循环应用下一套；前端 `setTimeout` 链到点触发；**优先级最低的自动行为**——定时切换或跟随系统任一开启时让位，手动还原默认后挂起到下一周期；默认关闭 |
 | 56 | 提示层口径：toast 报事件不报状态 | 设置开关（patchSettings 系）成功静默、失败弹「设置失败」；状态反馈交给开关自身与卡片状态行；写注册表的操作（自启动/右键菜单）成功也弹；自动行为只在真干活/失败时弹且用 silent 防双弹；不给开关统一加成功回执 |
+| 57 | 关闭行为三态与关窗询问 | `close_behavior` 扩为 ask（每次询问，**新装默认**）/ tray / exit；ask 下 Rust 拦关窗发 `close-ask` 事件、前端弹询问框（缩到托盘 / 退出 / 取消 + 「不再询问」，勾选后本次选择落盘）；托盘在 ask 模式藏窗期间存在；命令数 41→43（`hide_window_to_tray` / `exit_app`） |
+| 58 | 启动开屏与主窗延迟显示 | 单窗口 CSS 遮罩（`SplashOverlay`）：数据就绪淡出、最短停留 800ms / 最长 5s 兜底、`loadError` 也放行；主窗 `visible: false` 起步，遮罩挂载发 `splash-ready` 事件经 `tray::show_window` 亮窗（**零新命令**）；ask 托盘判定加 `EVER_SHOWN`（启动期等待不算藏窗）；真机白屏 dev 冷启动 3.8s→50ms、release 951→42ms |
+| 59 | 交互动效弹性升级（按压回弹） | 用户拍板「网页手感」：新增 `--motion-spring`(320ms)/`--ease-spring`(过冲~10%) 档；Button 按下 scale 0.97 + 松开 spring 回弹（两段曲线集中 App.css `motion-press`）、Toggle 滑块 spring 位移（过冲 ~2px 回位）、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压不做；修订 motion.md 硬规则 ease 家族 +1 与 2026-10-21「不做回弹」口径；`motion_check` 33→43 项 |
 | 60 | AniPlayer 停表条件扩展到失焦 | 停表条件从「离屏 / 窗口不可见」扩为「离屏 / 窗口不可见 / **失焦**」：可见但没焦点的后台窗口里动画没人看，`visibilitychange` 管不到；判定走 blur/focus 事件、不用 `document.hasFocus()` 定初值（自动化环境恒 false，会让验收脚本动画集体停摆）；停表保留末帧，视觉无变化 |
 | 61 | 主题描述可编辑 | `rename_theme` 增加可选 `newDescription`（补丁语义：`None` 不动 / 空串清除 / 有值替换），描述 ≤200 字禁控制字符；检查器头部原地编辑（与重命名同一套 Enter/Esc/失焦约定），底部脚注不再重复描述；系统方案描述来自注册表、不提供编辑；`updated_at` 不动 |
 | 62 | 批量整理「导出所选」 | `export_all_themes` 增加可选 `themeIds`：传清单只导清单内的用户主题、未知 ID 落空不报错，省略 = 全部；「导出所选」长在整理模式工具条（删除所选旁），与「导出全部」共用命令、`export:all` 忙碌键、ops 锁与部分成功语义——清理前先留底的工作流，不加新命令（命令数保持 43） |
-| 63 | 状态徽标 / 状态卡入场过渡 | 「使用中」徽标（图库卡 / 表格行 / 检查器）与侧栏「当前使用」卡三态：出现或翻转时入场淡入 180ms（复用 `enter-fade`，key 重挂触发）；**退场保持瞬变**——徽标是内联标记不是浮层，退场动画要保留 DOM + pointer-events 处理，复杂度与收益不成比；动画断言进 `motion_check`（36 项），真机只跑 UI 冒烟（徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界） |
-| 64 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（39 项）+ 真机 `verify_flip_shift.mjs` |
+| 63 | 状态徽标 / 状态卡入场过渡 | 「使用中」徽标（图库卡 / 表格行 / 检查器）与侧栏「当前使用」卡三态：出现或翻转时入场淡入 180ms（复用 `enter-fade`，key 重挂触发）；**退场保持瞬变**——徽标是内联标记不是浮层，退场动画要保留 DOM + pointer-events 处理，复杂度与收益不成比；动画断言进 `motion_check`（49 项中的徽标区），真机只跑 UI 冒烟（徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界） |
+| 64 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（49 项中的 FLIP 区）+ 真机 `verify_flip_shift.mjs` |
 | 65 | 主题卡 / 表格行右键菜单 | 图库卡与「我的主题」行右键出菜单：应用 / 导出 ZIP / 重命名（仅用户主题）/ 删除（仅用户主题，使用中禁用并说明；系统方案只有应用与导出）。**重命名与删除不直接执行**——先选中该主题再发 `mousetool:request-*` 事件，由检查器里已有的编辑框与确认框接手（确认与后果说明只有一份）；组件是 base-ui ContextMenu 自封装（`ui/context-menu.tsx`，浮层动效口径）；不做键盘入口（检查器已有完整键盘路径，右键菜单是鼠标快捷方式） |
 | 66 | 图库网格方向键导航 | 图库页 ←→ 移一张、↑↓ 移一行、Home/End 首尾，跨「系统方案 / 我的主题」两段连续漫游；**Tab 语义不动**（仍逐卡穿越，不做 roving tabindex）——方向键是二维移动的增强，不是替换；列数按第一行卡片实测（auto-fill 布局随窗宽变），不写死。断言进 `keyboard_nav_check.mjs`（14 项），真机冒烟用 CDP Input 域发真实按键验证 |
 | 67 | Ctrl+K 快速切换面板 | 应用内浮层：输入即过滤全部主题（我的主题在前名称序、系统方案在后、使用中置顶），↑↓ 高亮、Enter 直接应用、Esc 关；底部常驻「还原系统默认光标」动作行。快捷键注册进 `SHORTCUTS`（受 `shortcuts_enabled` 开关管辖）；候选过滤是纯函数 `lib/quick-switch.ts`（可单测）；面板是任务层浮层不进 PAGE_META/VIEWS；**应用失败只 toast、不在面板里确认**——面板只负责选 |
@@ -1192,12 +1195,65 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 57：关闭行为三态——默认每次询问，关窗先问再走
+
+**结论**（2026-11-01）：`close_behavior` 从两态扩为三态：`ask`（每次询问，**新装默认**）/ `tray`（最小化到托盘）/ `exit`（直接退出）。ask 模式下 Rust 拦下 CloseRequested 后发 `close-ask` 事件，前端弹「关闭窗口？」询问框：最小化到托盘 / 退出应用 / 取消，附「不再询问」勾选——勾选后本次选择经 `update_settings` 落盘，此后不再弹；不勾则只执行本次，下次关窗再问。已有用户的 settings.json 里存的是显式值，不受新默认影响。交互形态照 Qoder 的同款弹窗拍板（2026-11-01 用户看过截图后定「按照 Qoder 执行」）。
+
+- **动机**：定时切换（决策 33）/ 定时轮换（决策 55）/ 光标守护（决策 29）都只在前端存活期间运行，而原默认「直接退出」会静默停掉这些行为，设置文案此前从未点破这层依赖。询问框的第一职责就是把「缩到托盘 = 自动行为继续跑；退出 = 全部停止」说清楚，顺带让「最小化到托盘」被不知道它存在的人看见。
+- **实现要点**：
+  - 托盘存在规则放宽：tray 模式常驻不变；**ask 模式只在主窗口隐藏期间存在**（一次性「这次先缩到托盘」也必须有图标能叫回来，窗口回到前台后摘除）；exit 模式从不需要。`tray::sync` 按设置 + 主窗口可见性统一判定，启动路径里窗口还没建出来时按不藏窗算、不凭空造托盘。
+  - 新命令 `hide_window_to_tray`（ask 下一次性藏窗 + 按需补托盘）与 `exit_app`，命令数 41 → 43；持久化路径一律走既有 `update_settings`（那边同步托盘），新命令不重复写设置。
+  - 询问弹窗是任务层 Dialog（Esc / 点遮罩 = 取消，窗口保持打开），不是 AlertDialog——取消是安全动作，不需要强制选择。
+  - **藏窗必须在主线程执行**（真机实证，2026-11-01）：Win32 起始显示惯例会让「非创建线程对这扇窗的第一次 ShowWindow」静默无效，`spawn_blocking` 线程池换线程后再次失效——`hide_window_to_tray` 用 `run_on_main_thread`，托盘同步跟在同一闭包里保证「先藏窗、后按可见性补托盘」。
+  - **二次启动唤回隐藏窗改走命名事件**（真机实证，2026-11-01，修掉决策 12 老路径的既有 bug）：跨进程 ShowWindow（同步 / `ShowWindowAsync`、各种顺序）从第二实例发起全部静默失效；改为第二实例 `SetEvent` 即退、首个实例守护线程等信号后把 `show_window` 派到主线程执行；旧版首实例无等待线程时退回 `ShowWindowAsync` 兼容路径。
+- **边界**：页面尚未就绪时 `close-ask` 事件会丢，窗口保持打开、再关一次即可；这与托盘模式「拦下关闭」属同一族行为，不为关机 / 注销做特判。「不再询问」只复用 `close_behavior` 字段本身，不另设开关。
+- **已否决的替代**：只做「exit 且有自动行为开启时才条件弹窗」的窄版——用户拍板要完整三态（本条即最终口径，别再收窄回去）。
+
+**验收**：`settings` 解析三值与默认值单测（`关闭行为的字符串解析只认三个值`）；`scripts/close_ask_check.mjs`（新装默认 ask → 模拟关窗弹窗 → 取消不改设置 → 不勾选最小化只执行本次 → 勾选后最小化 / 退出分别落盘为 tray / exit，dev 钩子 `__closeAsk.simulate()`）；真机 `scripts/real_machine/verify_close_ask.mjs`（21 项全过，2026-11-01，证据与发现的 ShowWindow 坑见 `docs/real-machine-verify/决策57真机验证.md`）。
+
+---
+
+## 决策 58：启动开屏——单窗口遮罩 + 主窗延迟显示
+
+**结论**（2026-11-02）：启动时显示品牌开屏遮罩（`SplashOverlay`：favicon logo + 应用名居中，铺满窗口、`pointer-events-none`、`aria-hidden`），数据就绪后淡出让位；主窗口 `tauri.conf.json` 里 `visible: false` 起步，遮罩挂载即 `emit("splash-ready")`，Rust 收到后统一走 `tray::show_window` 亮窗——**用户看到的第一帧就是完整开屏**，没有「先白窗、后遮罩」的空档。2026-11-02 用户看真机效果后拍板采用。
+
+- **动机**：窗口出现 → WebView 首帧之间是一扇无内容窗口（真机实测 release 827–951ms；dev 冷启动因 Vite 未打包模块瀑布达 3.8s，178 个请求逐个现编译）。深色系统上白窗尤其突兀。开屏把这段变成品牌时刻，主窗延迟显示把「窗口出现」推迟到首帧就绪。
+- **方案取舍**：Tauri 官方的双窗口 splashscreen 模式否决——第二个 WebView 渲染进程（+30–80 MB 常驻内存）、capabilities / 关窗拦截按 label 区分、命令数与文档断言全要动，而本应用启动没有需要掩盖的长活；纯前端遮罩（方案 A）先行落地，白屏残留用主窗延迟显示（方案 C）补齐，A+C 组合即最终形态。窗口级 `backgroundColor` 亦否决——静态一色无法跟系统深浅色。
+- **实现要点**：
+  - 退出条件是「就绪」不是计时：settings 非空且主题首次加载结束（**成功与 `loadError` 都算**——错误态由 `LoadErrorState` 接管，开屏不得变成转圈）。两道保底：最短停留 800ms（数据太快就退会「闪一下」，比没有更难看；`prefers-reduced-motion` 下降为 0、就绪即走）；最长 5s 兜底（设置读取失败时 ready 恒 false 也得放行）。
+  - 动效全走既有 token，无新档位、无 motion.md 例外：logo 入场 `splash-in`（缩放 0.96→1 + 淡入，`--motion-slow` + `ease-standard`）、整层退场 `--motion-slow` + `ease-exit`、`transitionend` 后卸载。「停留多久」是启动编排不是动效，归组件计时器管，不占 `--motion-*`。
+  - **只在 `inTauri` 渲染**：浏览器 mock（26 个检查脚本）完全看不见遮罩，首屏断言不受影响。
+  - `splash-ready` 走事件不走命令：前端 `emit`、Rust `app.listen`，**零新命令**，命令数保持 43；显示统一复用 `tray::show_window`（自带 ask 模式托盘重算）。
+  - `tray::sync` 的 ask 分支加 `EVER_SHOWN`（`show_window` 置位）：「ask 藏窗期间才有托盘」的「藏」指用户收起已露面的窗口，启动期等待显示不算——否则主窗 `visible: false` 会让每次启动闪出一个随即消失的托盘图标。
+  - Rust 10s 兜底线程：未收到 `splash-ready` 就强制亮窗并记日志——前端起不来（dev 时 vite 挂了、JS 崩了）也不能让用户对着一台无窗进程。
+  - dev 体验：vite `server.warmup` 预热 `main.tsx` 模块图，cargo 编译期间并行完成变换（仅 dev 生效）。
+- **实测**（2026-11-02 真机，工具 `scripts/real_machine/_measure_gap.mjs`，进程→窗口→导航→FCP→遮罩五段分解）：用户感知白屏（窗口可见→遮罩可见）dev 冷启动 3802→**50ms**、dev 暖 973→25ms、release 951/827→**42/31ms**；窗口出现时机后移（release 进程→窗口约 0.9–1.1s），期间桌面无窗而非白窗。开屏停留 803–807ms、全程约 1.05s、减少动态下 57–78ms 即走。
+- **边界**：前端彻底加载失败时由 10s 兜底亮出白页（dev 下典型原因是 vite 未起）；F5 重载会重播开屏（生产无重载入口，dev 里重看效果反而方便）；开屏不阻断点击（`pointer-events-none`），就绪前的半成品界面可点但无碍。
+
+**验收**：真机 `scripts/real_machine/verify_splash.mjs` 11/11（2026-11-02，CDP `addScriptToEvaluateOnNewDocument` 注入 rAF 探针 + `Page.reload` 确定性重放，证据见 `docs/real-machine-verify/决策58真机验证.md`）；`verify_close_ask.mjs` 21/21 回归（`visible: false` + `EVER_SHOWN` 后决策 57 语义完好）；26 个浏览器检查脚本全绿；cargo test 249、clippy 零警告、前端单测 32。
+
+---
+
+## 决策 59：交互动效弹性升级（按压回弹）
+
+**结论**（2026-11-03）：控件按压反馈改走弹性回弹——用户拍板采用「网页手感」，授权按观感自主裁量（「我觉得好就行」）。新增第五档时长 `--motion-spring`(320ms) 与曲线 `--ease-spring`(cubic-bezier(0.34, 1.56, 0.64, 1)，终点前过冲 ~10% 再收回)；motion.md 2026-10-21 的「动画要像系统的一部分，不要像网页特效」与 toggle.tsx「不做动画回弹」的口径自此修订为：**浮层/转场维持克制，按压反馈走弹性**，范围以 motion.md §3 为准。
+
+- **范围（只有三处，其余不动）**：
+  - **Button**：`motion-press`（App.css 的 `@utility`）——按下 scale 0.97 + 1px 位移走 fast 档跟手，松开 scale 经 320ms spring 回弹一次。两段曲线（按下/松开各一套时长曲线）只有一条原生 transition 声明能做到按属性分列，Tailwind 的统一 `duration-*`/`ease-*` 写不出，故集中 App.css；颜色各项始终 fast/standard（320ms 的 hover 变色显得反应慢）；scale 用独立属性，与按下位移的 `translate` 互不覆盖。
+  - **Toggle**：滑块位移 120ms → 320ms ease-spring，过冲 ~2px 回位（实测 22.0→20.0px）；轨道颜色仍 120ms。
+  - **Checkbox**：对勾/横线入场 `check-pop`（scale 0→1 + ease-spring，实测峰值 1.098），挂载即播一次，取消勾选即卸载、无退场。
+- **token**：`--ease-emphasized`（过冲仅 ~2%）对可见行程太弱，维持定义但不使用；硬规则 ease 家族 +1（`ease-standard/ease-exit/ease-spring`），禁裸数字与 `transition-all` 不变。
+- **不做**：点击涟漪（要 JS 记录坐标逐帧扩散，与「除 Toast FLIP 外全 CSS」冲突，且按钮已有下沉+缩放双层反馈，鼠标桌面端收益低）；Segmented 选中项弹性（颜色过冲观感差）；内容卡片按压弹性（GalleryCard 面积大，scale 显眼，维持 180ms 标准）。
+- **兼容**：`prefers-reduced-motion` 全局兜底自动覆盖新 token（压到 0.01ms，实测断言通过）；无新依赖。
+- **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。真机 `scripts/real_machine/verify_spring_motion.mjs` 14/14（2026-11-03，真实 WebView2 + 隔离数据根，真实鼠标按下/释放采样，数据与 mock 逐项一致；证据见 `docs/real-machine-verify/决策59真机验证.md`）。
+- **环境坑（备查）**：`%TEMP%edge_headless_profile` 残留会让 motion_check 假失败（toast 不卸载、删除按钮轮询不到），删除该目录即恢复；诊断时用独立 profile 的脚本对照定位。
+
 ## 决策 60：AniPlayer 停表条件扩展到失焦
 
 **结论**（2026-11-03）：`AniPlayer` 的停表条件从两个（离屏 / `document.hidden`）扩为三个（+ **宿主窗口失焦**）。应用窗口可见但没焦点时（用户切去别的应用干活），动画照跑纯属白烧 CPU——图库封面是常驻自动播放的，一个列表几十块画布同时在后台窗口里画；`visibilitychange` 只覆盖最小化，覆盖不了这种「可见但不活跃」。停表保留末帧，重新聚焦续播，视觉上无任何变化。
 
 - **实现口径**：判定走 `window` 的 `blur` / `focus` **事件**驱动一个布尔值，初值恒为「有焦点」；**不用 `document.hasFocus()` 定初值**——它在无头浏览器 / CDP 自动化环境里恒为 `false`，初值一错所有验收脚本里的动画就集体停摆（事件只在真的发生焦点迁移时到达，对真实窗口「亮窗即聚焦」也成立）。
-- **真机证据**：`scripts/real_machine/verify_ani_blur.mjs`（6/6）——真实 OS 焦点迁移（激活桌面夺走焦点）下 drawImage 计数冻结为 0，重新聚焦后续播。
+- **真机证据**：`scripts/real_machine/verify_ani_blur.mjs`（8/8）——真实 OS 焦点迁移（激活桌面夺走焦点）下 drawImage 计数冻结为 0，重新聚焦后续播。
 - **边界**：打开 DevTools 会夺走焦点、动画随之暂停，属预期行为（调试时想看动画把焦点放回页面即可）。
 
 ---
@@ -1309,5 +1365,5 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 | 归档大小 | 主题包 50MB / 单文件 20MB / 512 条目 / 8 层；备份 1GiB / 单文件 64MB / 4096 条目 / 10 层。共用 `utils/limits.rs`，流式复制、超限清理（决策 18） |
 | 光标与预览上限 | 光标文件 20MB；预览源文件 8MB，超出直接降级为空预览（决策 18） |
 | `scripts/clean_c_drive.ps1` / `.py` | 与本项目无关的遗留脚本，文档不引用；已于 2026-10-31 移出仓库（决策 44） |
-| 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃） |
+| 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃）；`visible: false` 起步、开屏遮罩挂载后经 `splash-ready` 亮窗（决策 58） |
 | dev server | 前台用 `npm run tauri dev`；后台验证只用 `npm run dev:bg` / `dev:stop`，禁止 `npm run dev \| head` 这类管道启动 |

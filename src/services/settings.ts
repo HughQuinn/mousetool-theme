@@ -28,7 +28,8 @@ import type { CursorTheme } from "@/types/theme";
  * 只留命令签名、类型契约与真实 invoke 路径，mock 的业务口径不再散在这里。
  */
 
-export type CloseBehavior = "exit" | "tray";
+/** ask = 每次询问（新装默认，关窗先弹询问框，决策 57）/ exit = 直接退出 / tray = 最小化到托盘 */
+export type CloseBehavior = "ask" | "exit" | "tray";
 
 /** `get_settings` / `update_settings` 的返回值 */
 export interface SettingsSnapshot {

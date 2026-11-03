@@ -13,6 +13,8 @@ import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { ImportCenterDialog } from "@/components/import/ImportCenterDialog";
+import { CloseAskDialog } from "@/components/layout/CloseAskDialog";
+import { SplashOverlay } from "@/components/layout/SplashOverlay";
 import { Toaster } from "@/components/ui/toaster";
 import { QuickSwitcher } from "@/components/layout/QuickSwitcher";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
@@ -54,6 +56,7 @@ function App() {
   const refreshActive = useThemeStore((s) => s.refreshActive);
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
+  const themesLoading = useThemeStore((s) => s.loading);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
   const { dragActive } = useDragDropImport();
   const updateChecked = useRef(false);
@@ -159,7 +162,11 @@ function App() {
       <DropOverlay active={dragActive} />
       <ImportCenterDialog />
       <QuickSwitcher />
+      {/* 关窗询问（决策 57）：Rust 拦下关窗后发事件，弹窗让用户选去留 */}
+      <CloseAskDialog />
       <Toaster />
+      {/* 开屏遮罩：settings 与主题首次加载都落定后淡出；浏览器 mock（检查脚本）不渲染 */}
+      <SplashOverlay ready={settings !== null && !themesLoading} />
     </>
   );
 }

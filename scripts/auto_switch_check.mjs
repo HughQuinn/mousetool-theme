@@ -13,16 +13,16 @@ const URL_TO_OPEN = process.argv[2] ?? "http://localhost:1420";
 const OUT_DIR = process.env.TEMP ?? ".";
 const PORT = 9233;
 
-// 固定 profile 会带着上一轮末段重新打开的「自动切换已开启」设置，污染默认态断言：每轮清一次；
-// 清不掉（上一轮 Edge 还没退干净）就另起一个
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// mock 设置走 localStorage 持久化，profile 不清就会把上一次运行落的
+// 「开关开着 + 映射」带进本次，「默认关闭」断言永远翻车（与 schedule_check 同款防护）
 let PROFILE = join(OUT_DIR, "edge_auto_switch_profile");
 try {
   rmSync(PROFILE, { recursive: true, force: true });
 } catch {
   PROFILE = join(OUT_DIR, `edge_auto_switch_profile_${process.pid}`);
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const edge = spawn(EDGE, [
   "--headless=new",

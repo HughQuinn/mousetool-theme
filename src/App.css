@@ -57,12 +57,14 @@
   --elev-raised: 0 1px 2px oklch(0 0 0 / 0.06), 0 0 0 1px oklch(0 0 0 / 0.04);
   --elev-overlay: 0 8px 24px oklch(0 0 0 / 0.12), 0 0 0 1px oklch(0 0 0 / 0.06);
 
-  /* ── 动效时长：只有这四档，组件用 duration-(--motion-*) 引用 ──
-     退场单独一档且比入场短：消失要"让开"，不能拖住用户下一步 */
+  /* ── 动效时长：这五档，组件用 duration-(--motion-*) 引用 ──
+     退场单独一档且比入场短：消失要"让开"，不能拖住用户下一步；
+     spring 档配合 --ease-spring 做"到位后回弹一次"的弹性反馈（决策 59） */
   --motion-fast: 120ms;
   --motion-base: 180ms;
   --motion-slow: 240ms;
   --motion-exit: 160ms;
+  --motion-spring: 320ms;
 }
 
 @theme inline {
@@ -132,6 +134,8 @@
   /* ── 缓动 ── */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+  /* 弹性回弹（决策 59）：终点前过冲约 10% 再收回——滑块/对勾这类"看得见的行程"用 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   /* 退场用加速曲线：越走越快，读起来是"撤走"而不是"卡住后消失" */
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
@@ -239,6 +243,62 @@
 
 @utility enter-fade {
   animation: enter-fade var(--motion-base) var(--ease-standard) both;
+}
+
+/* 开屏遮罩的 logo 入场：缩放 0.96→1 + 淡入，与浮层入场同档。
+   遮罩停留多久不是动效、是启动编排（最短 800ms / 就绪即走 / 5s 兜底），
+   由 SplashOverlay 的计时器管——--motion-* 四档管的是"过渡手感"，不是"等多久" */
+@keyframes splash-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@utility splash-in {
+  animation: splash-in var(--motion-slow) var(--ease-standard) both;
+}
+
+/* 按压弹性（决策 59）：按下 scale 0.97 跟手走 fast 档，松开经 spring 曲线回弹一次。
+   两段曲线一条 transition 声明写不出（Tailwind 的 duration-/ease- 是统一值），
+   集中在这里管；颜色始终走 fast 档——hover 变色迟 320ms 会显得"反应慢"，不跟着弹 */
+@utility motion-press {
+  transition:
+    color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    translate var(--motion-fast) var(--ease-standard),
+    scale var(--motion-spring) var(--ease-spring);
+
+  &:active {
+    scale: 0.97;
+    transition:
+      color var(--motion-fast) var(--ease-standard),
+      background-color var(--motion-fast) var(--ease-standard),
+      border-color var(--motion-fast) var(--ease-standard),
+      box-shadow var(--motion-fast) var(--ease-standard),
+      translate var(--motion-fast) var(--ease-standard),
+      scale var(--motion-fast) var(--ease-standard);
+  }
+}
+
+/* 复选框对勾/横线入场：scale 0→1 配 spring 曲线，挂载即播一次、取消即卸载无退场 */
+@keyframes check-pop {
+  from {
+    scale: 0;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+@utility check-pop {
+  animation: check-pop var(--motion-spring) var(--ease-spring) both;
 }
 
 /* Toast 倒计时条：贴卡片底边的 scaleX 由 1 缩到 0，条长就是"剩余寿命"。
