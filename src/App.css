@@ -263,10 +263,14 @@
   animation: splash-in var(--motion-slow) var(--ease-standard) both;
 }
 
-/* 按压弹性（决策 59）：按下 scale 0.97 跟手走 fast 档，松开经 spring 曲线回弹一次。
+/* 按压弹性（决策 59）+ 水滴容器（决策 60）：按下 scale 0.97 跟手走 fast 档，
+   松开经 spring 曲线回弹一次；涟漪需要在按钮内荡开，容器自带 relative + overflow-hidden。
    两段曲线一条 transition 声明写不出（Tailwind 的 duration-/ease- 是统一值），
    集中在这里管；颜色始终走 fast 档——hover 变色迟 320ms 会显得"反应慢"，不跟着弹 */
 @utility motion-press {
+  position: relative;
+  overflow: hidden;
+
   transition:
     color var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard),

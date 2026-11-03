@@ -42,10 +42,15 @@
 
 **硬规则**：组件里只写 `duration-(--motion-*)` 和 `ease-standard` / `ease-exit` / `ease-spring`。禁止 `duration-200` 这类裸数字，也禁止 `transition-all`。按钮按压的两段曲线（按下 fast、松开 spring）一条 Tailwind 声明写不出，集中在 App.css 的 `motion-press`（见 §4.4）。
 
-**唯一例外：Toast 倒计时条**。它是剩余时间的**读数**，不是装饰性动效：
-- 时长 = 该条 toast 的超时（3.2–6s），由组件内联 `animation-duration` 注入 —— 是数据不是档位；
-- 缓动必须 `linear`：ease 会让"剩余多少"的读数失真（同样一格长度代表的秒数前后不一致）。
-实现见 `src/App.css` 的 `toast-countdown`，挂起同步见 `src/components/ui/toaster.tsx`。
+**JS 侧例外有二**（CSS transition/keyframes 表达不了的才允许 JS）：
+
+1. **Toast 倒计时条**——它是剩余时间的**读数**，不是装饰性动效：
+   - 时长 = 该条 toast 的超时（3.2–6s），由组件内联 `animation-duration` 注入 —— 是数据不是档位；
+   - 缓动必须 `linear`：ease 会让"剩余多少"的读数失真（同样一格长度代表的秒数前后不一致）。
+   实现见 `src/App.css` 的 `toast-countdown`，挂起同步见 `src/components/ui/toaster.tsx`。
+2. **按压水滴（决策 60）**——涟漪要按点击坐标定位、水珠晃动是多周期衰减振荡，单段贝塞尔曲线表达不了：
+   - 实现见 `src/components/ui/press-water.ts`（全局委托，凡 `button.motion-press` 都覆盖）；
+   - 与 Toast FLIP 同级的一次性 WAAPI 补间，非常驻逐帧 JS；`prefers-reduced-motion` 下在 JS 侧直接跳过。
 
 ---
 
@@ -59,7 +64,7 @@
 | **Toast** | 下方 8px 起、缩放 0.96→1、淡入，240ms，原点在右下 | 下沉 4px、缩到 0.98、淡出，160ms | 堆叠让位 180ms（FLIP）；关闭按钮悬停 120ms；倒计时条随剩余寿命 linear 缩短，悬停/失焦与计时器同挂起（§2 例外） |
 | **AlertDialog 遮罩** | 淡入 180ms | 淡出 160ms | — |
 | **AlertDialog 弹窗** | 缩放 0.96→1 + 淡入，240ms，中心原点 | 缩回 0.96 + 淡出，160ms | — |
-| **Button** | — | — | 悬停/焦点 120ms；按下 scale 0.97 + 1px 位移（120ms 跟手）；松开 scale 经 spring 320ms 回弹一次（决策 59，§4.4）；禁用不参与 |
+| **Button** | — | — | 悬停/焦点 120ms；按下 scale 0.97 + 1px 位移（120ms 跟手）；松开 scale 水珠晃动：衰减振荡 0.97→1.02→0.993→1.004→1（480ms WAAPI，决策 60）；按下荡开涟漪（500ms 淡出，WAAPI，决策 60）；禁用不参与 |
 | **Toggle（开关滑块）** | — | — | 滑块位移 320ms ease-spring（过冲 ~2px 回位，决策 59）；轨道颜色 120ms |
 | **Checkbox** | — | — | 框颜色 120ms；对勾/横线入场 `check-pop`：scale 0→1 + ease-spring（峰值 ~1.1，决策 59）；取消勾选即卸载、无退场 |
 | **Input** | — | — | 焦点环与描边 120ms；错误态同档 |
@@ -83,8 +88,9 @@
 | 宽高 / 位置动画 | 触发布局重排，必然掉帧。高度变化一律交给 FLIP 的 transform |
 | Toast 滑动手势 | base-ui 已经用 transform 跟随指针，接管反而会打架 |
 | 面板拖拽补间 | 拖分隔条是直接操作，宽度必须跟手；补间会变成"拖完再滑一段"，反而更难对准 |
-| 点击涟漪（ripple） | 要 JS 记录点击坐标逐帧扩散，与「除 Toast FLIP 外全 CSS」的口径冲突；按钮已有「下沉 + 缩放回弹」双层反馈，涟漪是触摸屏的视觉补偿，鼠标桌面端收益低（决策 59） |
 | 内容卡片按压弹性 | GalleryCard 等面积大，scale 变化显眼且与"卡片是内容不是控件"的定位不符，维持 180ms 标准过渡（决策 59） |
+| 开关滑块 / 对勾的水珠晃动 | 开关要利落，多周期晃动显得拖泥带水；单次过冲回弹已够（决策 60） |
+| 键盘激活的水滴 | 缩放反馈已有；涟漪从指针坐标来，键盘没有坐标，为中心补一套得不偿失（决策 60） |
 | 滚动条进出场的动画 | 滚动条是系统画的，能调的只有宽度与配色；`gutter: stable` 已经消除了"出现滚动条把内容挤一下"的跳动 |
 | 遮罩模糊动画 | 每帧 `backdrop-filter` 开销高，桌面端收益低 |
 
@@ -162,6 +168,21 @@ CSS 的规则是「变化发生时按**新状态**的 transition 定义走」，
 2. **scale 是独立属性不是 `transform`**：与按下位移用的 `translate` 属性（`translate-y-px`）互不覆盖，两条过渡可以并存。
 3. **滑块/对勾不需要两段**：Toggle 点击即切换、Checkbox 对勾挂载即播，没有「按下/松开」两态，一条 spring 过渡/动画就够。
 
+### 4.5 按压水滴：涟漪 + 水珠晃动（决策 60）
+
+用户在决策 59 的基础上要「水滴感」，落成两件叠在按钮上的反馈（`press-water.ts`）：
+
+- **涟漪**：pointerdown 时在按钮内（`motion-press` 自带 `relative + overflow-hidden`）插入一个圆 span，从点击点 `scale 0→1 + opacity 0.22→0` 荡开 500ms，`finished` 后移除。颜色取 `currentColor`——default 按钮是白波、ghost/outline 是前景色波，一套代码全变体通用。
+- **水珠晃动**：pointerup 后对按钮播 480ms 的衰减振荡 keyframes（`scale 0.97→1.02→0.993→1.004→1`）。松手不再走 §4.4 的单次 spring 回弹——WAAPI 动画优先于 transition，动画播完 CSS 已稳定在 1。
+
+架构上是**全局委托**（`installPressWater()`，App 挂一份）：document 捕获 pointerdown，`closest('button.motion-press')` 命中才动。原因：侧栏导航等处是 `buttonVariants()` 类串配原生 `<button>`（要塞活动条等自定义结构），逐组件挂载会漏，类名即行为标记——凡 `motion-press` 就有水滴，未来变体自动获得。
+
+约束：
+
+- 晃动用独立 `scale` 属性的 keyframes，不碰 `transform`（避免覆盖按下位移的 translate）。
+- 快速连点各自出涟漪（独立 span 独立动画），互不排队。
+- 键盘激活不出水滴（没有坐标，见 §3 不做表）。
+
 ---
 
 ## 5. 可访问性
@@ -198,7 +219,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 必须和 dev server 写在同一条命令里 —— 跨命令的 dev server 会被回收。
 
-脚本逐帧采样，而不是单点截图，断言 43 项：
+脚本逐帧采样，而不是单点截图，断言 47 项：
 
 - Toast 入场/退场：是否真的在过渡、时长、中间态、位移、结束是否卸载；
 - Toast 倒计时条：时长是否等于该条超时、是否随时间缩短、悬停是否真冻结、移开是否继续；
@@ -206,7 +227,9 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 - Toast 让位：是否触发 FLIP、时长 180ms；
 - `prefers-reduced-motion`：时长是否被压到近似 0、是否跳过 FLIP、倒计时条是否不显示；
 - 控件：按钮 120ms、主题卡 180ms 且走 `box-shadow`；
-- 按压弹性（决策 59）：按钮过渡含 320ms spring 段、真实鼠标按下缩到 0.97、释放过冲超过原尺寸后回弹并停在原尺寸；开关滑块 320ms spring、切换越过终点（过冲 22px）后回位；对勾播 `check-pop`、过冲（scale > 1.05）后回位到 1；
+- 按压弹性（决策 59）：按钮过渡含 320ms spring 段、真实鼠标按下缩到 0.97；
+- 按压水滴（决策 60）：真实鼠标按下荡开涟漪（`[data-ripple]` 出现、500ms 后移除）、松开水珠晃动（过冲 > 1.01、越过原尺寸后下穿再回 1）、减少动态下不产生涟漪；
+- 开关滑块 320ms spring、切换越过终点（过冲 22px）后回位；对勾播 `check-pop`、过冲（scale > 1.05）后回位到 1；
 - 运行期无 JS 异常。
 
 改完动效，这条 + `design_check.mjs` 都绿才算完成。
@@ -217,6 +240,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-03 | 按压水滴（决策 60）：用户要「水滴感」，涟漪从「不做」翻案——按下荡开涟漪 + 松开水珠衰减晃动（`press-water.ts` 全局委托，凡 `motion-press` 按钮都覆盖）；JS 例外区从一条改两条；开关滑块/对勾维持单次回弹；`motion_check` 43→47 项 |
 | 2026-11-03 | 按压弹性（决策 59）：新增第五档 `--motion-spring`(320ms) 与 `--ease-spring` 曲线；Button 按下 scale 0.97 + 松开回弹（App.css `motion-press` 两段曲线，§4.4）、Toggle 滑块 spring 位移、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压列入「不做」；硬规则 ease 家族 +1；`motion_check` 33→43 项 |
 | 2026-11-02 | 开屏遮罩（决策 58）：logo 入场 `splash-in` 与整层退场全走既有四档 token，无新档位、无例外；「停留时长是启动编排不是动效」的口径记入 §3 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |
