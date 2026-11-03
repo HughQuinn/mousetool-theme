@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{cursor, limits, paths, validation};
+use crate::utils::{cursor, limits, log, paths, theme_paths, validation};
 
 /// 条目快照文件名；以点开头，不与主题里的光标文件撞名
 const META_FILE: &str = ".trash.json";
@@ -77,8 +77,12 @@ pub struct DeleteOutcome {
 }
 
 /// 恢复主题的结果
+///
+/// `theme_id` 是恢复后的主题 ID：普通恢复 = 原主题 ID；恢复为副本（决策 54）=
+/// 新分配的 UUID，前端拿它把新主题选进图库与「我的主题」。
 #[derive(Debug, Serialize)]
 pub struct RestoreOutcome {
+    pub theme_id: Option<String>,
     pub warning: Option<String>,
 }
 
@@ -421,7 +425,7 @@ fn list_in(root: &Path) -> Result<Vec<TrashEntry>, String> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("[list_trash] 读取目录项失败，已跳过（{err}）");
+                log::warn("list_trash", &format!("读取目录项失败，已跳过（{err}）"));
                 continue;
             }
         };
@@ -489,7 +493,7 @@ pub fn restore(entry_id: &str) -> Result<RestoreOutcome, String> {
     let target = themes_root.join(&theme_id);
     if target.exists() {
         return Err(
-            "主题目录里已经有同 ID 的主题（可能从备份恢复过），请先处理那一份再恢复"
+            "主题目录里已经有同 ID 的主题（可能从备份恢复过），可改用「存为副本」生成一份新 ID 的副本"
                 .to_string(),
         );
     }
@@ -505,7 +509,106 @@ pub fn restore(entry_id: &str) -> Result<RestoreOutcome, String> {
     }
     cursor::invalidate_dir(&dir);
 
-    Ok(RestoreOutcome { warning })
+    Ok(RestoreOutcome {
+        theme_id: Some(theme_id),
+        warning,
+    })
+}
+
+/// 副本名称：原名 +「（副本）」，超出 40 字上限时截断原名兜底（决策 54）
+///
+/// 截断按字符数（不是字节）算——中文名一个字就是三个字节。快照名在删除时
+/// 已经过名称校验，这里只防「原名 40 字顶着上限」的组合。
+fn copy_name(name: &str) -> String {
+    const SUFFIX: &str = "（副本）";
+    const MAX_LEN: usize = 40;
+    let trimmed = name.trim();
+    let base = if trimmed.is_empty() {
+        "未命名主题".to_string()
+    } else {
+        trimmed.to_string()
+    };
+    let keep = MAX_LEN - SUFFIX.chars().count();
+    let stem: String = base.chars().take(keep).collect();
+    format!("{stem}{SUFFIX}")
+}
+
+/// 把回收站条目恢复为一份**副本**：新 UUID、新目录，与主题库里已有的同 ID 主题并存
+///（决策 54）
+///
+/// 与 [`restore`] 的差异只在「目标已被占用」的处理：普通恢复直接拒绝，这里
+/// 分配新 ID 收下。走**复制**而不是搬移——任何一步失败都删掉半成品目录、
+/// 回收站条目原样保留，用户可以重试或改走普通恢复。
+pub fn restore_as_copy(entry_id: &str) -> Result<RestoreOutcome, String> {
+    let dir = entry_dir(entry_id)?;
+    if !dir.is_dir() {
+        return Err("回收站里没有这个条目，可能已被清理".to_string());
+    }
+    if limits::is_reparse_path(&dir) {
+        return Err("回收站条目是链接或目录联接，已拒绝恢复".to_string());
+    }
+
+    let meta = read_meta(&dir).map_err(|err| format!("回收站记录已损坏，无法恢复（{err}）"))?;
+    if meta.id != canonical_id(entry_id)? {
+        return Err("回收站记录与目录不一致，已拒绝恢复".to_string());
+    }
+    let theme_id = canonical_theme_id(&meta.theme_id)?;
+    validate_theme_json(&dir, &theme_id)
+        .map_err(|err| format!("{err}，无法恢复"))?;
+
+    // 校验通过后重读 theme.json：副本要改写 id 与名称，快照只当目录名的旁证
+    let raw = limits::read_text_bounded(
+        &dir.join("theme.json"),
+        limits::MAX_THEME_JSON_BYTES,
+    )
+    .map_err(|err| format!("主题信息读不出来，无法恢复为副本（{err}）"))?;
+    let mut theme: CursorTheme = serde_json::from_str(&raw)
+        .map_err(|err| format!("主题信息不是有效 JSON，无法恢复为副本（{err}）"))?;
+
+    let new_id = Uuid::new_v4().to_string();
+    let themes_root = paths::themes_dir()?;
+    paths::ensure_dir(&themes_root)?;
+    let target = themes_root.join(&new_id);
+
+    // 全新 UUID 不会撞目录；防御式再挡一次，别把意外变成覆盖
+    if target.exists() {
+        return Err("副本落点已存在同名目录，请重试".to_string());
+    }
+
+    if let Err(err) = copy_dir(&dir, &target, 0) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!("复制主题目录失败，已撤销本次副本恢复（{err}）"));
+    }
+
+    // 快照不属于主题内容（与普通恢复删除 META_FILE 同口径）；删不掉就整体撤销
+    if let Err(err) = fs::remove_file(target.join(META_FILE)) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!(
+            "清理回收站记录失败，已撤销本次副本恢复（{err}）"
+        ));
+    }
+
+    // 改写 id 与名称后按标准写盘：槽位路径保持磁盘相对（硬约束 18 的口径不变）
+    theme.id = new_id.clone();
+    theme.name = copy_name(&theme.name);
+    if let Err(err) = theme_paths::write_theme_json(&target, &theme) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!("写入主题信息失败，已撤销本次副本恢复（{err}）"));
+    }
+
+    // 复制成功才消费条目；删不掉只影响回收站视图，不影响已恢复的副本
+    let mut warning = None;
+    if let Err(err) = fs::remove_dir_all(&dir) {
+        warning = Some(format!(
+            "副本已恢复，但回收站条目没能删除（{err}）；可在回收站里手动彻底删除"
+        ));
+    }
+    cursor::invalidate_dir(&dir);
+
+    Ok(RestoreOutcome {
+        theme_id: Some(new_id),
+        warning,
+    })
 }
 
 /// 彻底删除一个回收站条目
@@ -722,6 +825,106 @@ mod tests {
         let err = restore(&entry_id).unwrap_err();
         assert!(err.contains("已经有同 ID"), "实际：{err}");
         assert_eq!(list().expect("条目应保留").entries.len(), 1);
+    }
+
+    /// 恢复为副本（决策 54）：新 ID 新目录，名称加后缀，条目被消费
+    #[test]
+    fn 恢复为副本生成新_id与新目录() {
+        let root = TempDir::new("trash-copy");
+        let _guard = root.isolate_paths();
+
+        let id = Uuid::new_v4().to_string();
+        let _dir = seed_theme(&id, "要留两份的主题");
+        move_into_trash(&id, "要留两份的主题", 1).expect("移入回收站");
+        let entry_id = list().expect("列出").entries[0].id.clone();
+
+        let outcome = restore_as_copy(&entry_id).expect("副本恢复应成功");
+        assert!(outcome.warning.is_none());
+        let new_id = outcome.theme_id.expect("应返回新主题 ID");
+        assert_ne!(new_id, id, "副本必须拿新 ID");
+        assert!(validation::is_canonical_uuid(&new_id), "新 ID 必须是规范 UUID");
+
+        // 原目录还占着（目标未占用时也不受影响），副本落在自己的新目录里
+        assert!(
+            !paths::theme_dir(&id).expect("解析原主题目录").exists(),
+            "普通恢复没发生，原 ID 不该出现在主题库"
+        );
+        let copy_dir = paths::theme_dir(&new_id).expect("解析副本目录");
+        assert!(copy_dir.join("cursors").join("arrow.cur").is_file(), "光标文件应复制");
+        assert!(!copy_dir.join(META_FILE).exists(), "快照不应留在副本里");
+
+        // theme.json 的 id 与目录一致（硬约束 20），名称带「（副本）」
+        let raw = fs::read_to_string(copy_dir.join("theme.json")).expect("读回 theme.json");
+        let stored: CursorTheme = serde_json::from_str(&raw).expect("解析 theme.json");
+        assert_eq!(stored.id, new_id, "theme.json 的 id 必须改写成目录名");
+        assert_eq!(stored.name, "要留两份的主题（副本）");
+        assert!(
+            stored.cursors[0].file_path.starts_with("cursors/"),
+            "槽位路径必须仍是相对路径：{:?}",
+            stored.cursors[0].file_path
+        );
+
+        // 条目被消费
+        assert!(list().expect("列出").entries.is_empty());
+    }
+
+    /// 目标 ID 已存在时，副本恢复照样成功——这正是它存在的意义
+    #[test]
+    fn 目标已存在时恢复为副本仍成功() {
+        let root = TempDir::new("trash-copy-conflict");
+        let _guard = root.isolate_paths();
+
+        let id = Uuid::new_v4().to_string();
+        let dir = seed_theme(&id, "同名副本");
+        move_into_trash(&id, "同名副本", 1).expect("移入回收站");
+        let entry_id = list().expect("列出").entries[0].id.clone();
+        // 目标被占：同 ID 主题已从备份恢复回来
+        fs::create_dir_all(&dir).expect("重建同 ID 主题目录");
+
+        let outcome = restore_as_copy(&entry_id).expect("副本恢复不应被目标占用挡住");
+        let new_id = outcome.theme_id.expect("应返回新主题 ID");
+        assert_ne!(new_id, id);
+        assert!(paths::theme_dir(&id).expect("原主题目录").is_dir());
+        assert!(paths::theme_dir(&new_id).expect("副本目录").is_dir());
+        assert!(list().expect("列出").entries.is_empty());
+    }
+
+    #[test]
+    fn 损坏条目同样不能恢复为副本() {
+        let root = TempDir::new("trash-copy-damaged");
+        let _guard = root.isolate_paths();
+
+        let id = Uuid::new_v4().to_string();
+        seed_theme(&id, "坏副本");
+        move_into_trash(&id, "坏副本", 1).expect("移入回收站");
+        let entry_id = list().expect("列出").entries[0].id.clone();
+        fs::remove_file(
+            paths::trash_dir()
+                .expect("回收站目录")
+                .join(&entry_id)
+                .join(META_FILE),
+        )
+        .expect("删快照");
+
+        let err = restore_as_copy(&entry_id).unwrap_err();
+        assert!(err.contains("损坏"), "实际：{err}");
+        assert_eq!(list().expect("条目保留").entries.len(), 1);
+    }
+
+    #[test]
+    fn 副本名称截断到四十字以内() {
+        let long = "长".repeat(40);
+        let name = copy_name(&long);
+        assert_eq!(name.chars().count(), 40, "顶格原名要截断后加后缀");
+        assert!(name.ends_with("（副本）"));
+        assert!(
+            validation::validate_theme_name(&name).is_ok(),
+            "拼出的副本名必须能过名称校验：{name}"
+        );
+
+        assert_eq!(copy_name("晨光"), "晨光（副本）");
+        assert_eq!(copy_name("  空白  "), "空白（副本）", "首尾空白沿用名称校验口径");
+        assert_eq!(copy_name(""), "未命名主题（副本）");
     }
 
     #[test]

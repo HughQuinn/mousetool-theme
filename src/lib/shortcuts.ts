@@ -5,6 +5,8 @@
  * 应用失焦时自然不触发。
  */
 import { pickAndImportZip } from "@/lib/import-zip";
+import { shortcutCodeOf } from "@/lib/shortcut-code";
+import { useQuickSwitchStore } from "@/stores/quickSwitchStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 
@@ -21,6 +23,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "page-mine", keys: "Ctrl+2", label: "切换到「我的主题」" },
   { id: "page-recent", keys: "Ctrl+3", label: "切换到「最近使用」" },
   { id: "page-settings", keys: "Ctrl+4", label: "切换到「设置」" },
+  { id: "quick-switch", keys: "Ctrl+K", label: "快速切换主题（搜索并应用）" },
   { id: "import", keys: "Ctrl+O", label: "导入主题（打开文件选择框）" },
   { id: "search", keys: "Ctrl+F", label: "聚焦搜索框（有搜索的页面）" },
 ];
@@ -40,7 +43,7 @@ export function initShortcuts(): () => void {
     const settings = useSettingsStore.getState().settings;
     if (settings && !settings.shortcuts_enabled) return;
 
-    switch (event.code) {
+    switch (shortcutCodeOf(event)) {
       case "Digit1":
         event.preventDefault();
         useThemeStore.getState().setCurrentPage("gallery");
@@ -56,6 +59,11 @@ export function initShortcuts(): () => void {
       case "Digit4":
         event.preventDefault();
         useThemeStore.getState().setCurrentPage("settings");
+        break;
+      case "KeyK":
+        // 快速切换面板（决策 68）：开着再按一次是关闭（toggle）
+        event.preventDefault();
+        useQuickSwitchStore.getState().setOpen(!useQuickSwitchStore.getState().open);
         break;
       case "KeyO":
         event.preventDefault();

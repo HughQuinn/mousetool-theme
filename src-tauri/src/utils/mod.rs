@@ -7,6 +7,7 @@ pub mod inf_export;
 pub mod inf_parse;
 pub mod integration;
 pub mod limits;
+pub mod log;
 pub mod ops;
 pub mod paths;
 pub mod progress;
@@ -14,6 +15,7 @@ pub mod registry;
 pub mod settings;
 #[cfg(test)]
 pub mod test_support;
+pub mod theme_file;
 pub mod theme_paths;
 pub mod themes_dir;
 pub mod trash;

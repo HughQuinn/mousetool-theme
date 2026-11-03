@@ -282,6 +282,18 @@ pub fn validate_theme_name(raw: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// 描述校验（决策 62）：允许空串（= 清除描述），最多 200 字、禁控制字符
+pub fn validate_theme_description(raw: &str) -> Result<String, String> {
+    let description = raw.trim();
+    if description.chars().count() > 200 {
+        return Err("描述最多 200 个字".to_string());
+    }
+    if description.chars().any(char::is_control) {
+        return Err("描述不能包含换行或控制字符".to_string());
+    }
+    Ok(description.to_string())
+}
+
 /// 读盘后的槽位清洗：未知键、重复键、越出主题目录的路径都丢弃并给出提示
 pub fn sanitize_loaded_slots(theme: &mut CursorTheme, theme_dir: &Path) -> Vec<String> {
     let mut warnings = Vec::new();

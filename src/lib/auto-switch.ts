@@ -1,5 +1,6 @@
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { scheduleOwnsNow } from "@/lib/schedule-switch";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -52,16 +53,28 @@ function maybeSwitch(): void {
   // 只有系统深浅色真的翻转（onSystemSchemeChange）才解除
   if (!state.armed || state.applying || state.suspended) return;
 
+  // 定时切换正拥有当前时段（决策 33）：期间内的主题交给它，深浅色让位，
+  // 否则两个自动机制会在同一分钟里互相覆盖
+  const settings = useSettingsStore.getState().settings;
+  if (settings && scheduleOwnsNow(settings)) return;
+
   const target = autoSwitchTargetId();
   if (!target || target === state.lastAppliedId) return;
 
   const themeState = useThemeStore.getState();
+  if (themeState.themes.length === 0) {
+    // 启动竞态：settings 常先于主题列表就绪（单文件 vs 目录扫描）。
+    // 空列表下 applyTheme 会静默 no-op，这里若照常走到 finally 把 lastAppliedId
+    // 记上，列表就绪后的评估会被去重挡住，「启动后的首次评估」就永远不生效；
+    // 所以直接退避什么都不记——列表到位时的订阅回调会再触发一次评估。
+    return;
+  }
   if (themeState.activeThemeId === target) {
     // 用户（或上一轮自动切换）已经把它应用上了：记下来，焦点触发别重复应用
     state.lastAppliedId = target;
     return;
   }
-  if (themeState.themes.length > 0 && !themeState.themes.some((theme) => theme.id === target)) {
+  if (!themeState.themes.some((theme) => theme.id === target)) {
     // 映射指向的主题已被删除：等用户改选，不打扰
     state.lastAppliedId = null;
     return;

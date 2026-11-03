@@ -6,7 +6,7 @@
 > **本文档的命令与结论均在本仓库实测过**（2026-10-22）。实测过程中发现并修复了两个
 > 会直接卡住发布的问题，详见 §1.3（版本错位）与 §2.2 坑 ⑧（MSI 与中文产品名冲突，已修复）。
 >
-> 文档版本：2026-10-22，对应仓库 `XU-QiYi/mouseTool-theme`，首个发布版本 v0.1.0。
+> 文档版本：2026-10-22，对应仓库 `XU-QiYi/mousetool-theme`，首个发布版本 v0.1.0。
 
 ---
 
@@ -16,13 +16,13 @@
 
 | 项 | 本指南的假设 | 为什么是这个 |
 |---|---|---|
-| 托管平台 | **GitHub Releases** | 仓库远端就是 `https://github.com/XU-QiYi/mouseTool-theme.git` |
+| 托管平台 | **GitHub Releases** | 仓库远端就是 `https://github.com/XU-QiYi/mousetool-theme.git` |
 | 目标平台 | **仅 Windows 10/11 x64** | 应用依赖 `HKCU` 注册表 + `SPI_SETCURSORS`，macOS/Linux 无法运行 |
 | 工具链 | Node 22 · Rust 1.95 · Visual Studio 生成工具 2026 | 本机 `tauri info` 实测值 |
 | 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
 | 代码签名 | **暂无证书，产物未签名** | 当前状态；用户装机会遇到 SmartScreen 提示，§3.4 有应对话术 |
 | 上传方式 | **GitHub 网页手动拖拽** | 你已选定；`gh` CLI 作为备选写在 §7.2 |
-| 版本号 | **0.1.0**，tag 为 **v0.1.0** | 与 `package.json` / `Cargo.toml` / `tauri.conf.json` 三处现状一致 |
+| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「五处一致」为准（现为 `0.5.0`），示例命令里的 `0.1.0` 按当次版本替换 |
 | 自动更新 | **不做** | 项目未接入 `tauri-plugin-updater`，无需 `.sig` / `latest.json` |
 
 > **关于版本号的讲究**（如果你之前问过这个）：SemVer 的 `主.次.修订` 三段是一句**兼容性承诺**——
@@ -58,15 +58,17 @@ git log --oneline main..origin/main
 - ① 输出为空 → 通过。非空说明有未提交改动，先 `git add` + `git commit`。
 - ③ 输出为空 → 通过。非空说明远端有别人的新提交，先 `git pull --rebase`。
 
-### 1.2 版本号三处一致
+### 1.2 版本号五处一致
 
-本项目版本号写在**三个地方**，必须同步：
+本项目版本号写在**五个地方**，必须同步：
 
 | 文件 | 字段 | 当前值 |
 |---|---|---|
-| `package.json` | `version` | `0.1.0` |
-| `src-tauri/Cargo.toml` | `[package] version` | `0.1.0` |
-| `src-tauri/tauri.conf.json` | `version` | `0.1.0` |
+| `package.json` | `version` | `0.5.0` |
+| `src-tauri/Cargo.toml` | `[package] version` | `0.5.0` |
+| `src-tauri/tauri.conf.json` | `version` | `0.5.0` |
+| `src/lib/app-meta.ts` | `APP_VERSION` | `0.5.0` |
+| `package-lock.json` | 根 `version`（两处：顶层 + `packages[""]`） | `0.5.0` |
 
 检查命令：
 
@@ -74,12 +76,23 @@ git log --oneline main..origin/main
 node -e "console.log('package.json =', require('./package.json').version)"
 Select-String -Path src-tauri\Cargo.toml -Pattern '^version'
 Select-String -Path src-tauri\tauri.conf.json -Pattern '"version"'
+Select-String -Path src\lib\app-meta.ts -Pattern 'APP_VERSION ='
+Select-String -Path package-lock.json -Pattern '"version": "0\.' | Select-Object -First 4
 ```
 
 > **坑 ①：只改了 `package.json` 忘了改 `Cargo.toml`。**
 > Tauri 的打包器读的是 `tauri.conf.json` 的 `version`，Rust crate 用的是 `Cargo.toml` 的。
 > 只改一处 → 安装包文件名叫 `0.1.1` 但内部 crate 还是 `0.1.0`，用户反馈"版本号不对"时极难排查。
-> **三处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
+> **五处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
+
+> **坑 ②：`app-meta.ts` 是浏览器开发模式的兜底版本，不在三处配置文件里，最容易漏。**
+> 正式跑 Tauri 时界面版本号来自 `getVersion()`，所以漏改不影响已打包用户；
+> 但浏览器验收、检查更新失败退回的比较基准都读它——2026-10-29 发现升 0.2.0 时漏改了它，
+> 开发模式里应用自报 `v0.1.0`、检查更新误判「发现新版本」。当时上表从三处扩成四处。
+
+> **坑 ③：`package-lock.json` 的根版本是第五处，2026-10-30 升 0.3.0 时发现它还停在 0.1.0**
+> （0.2.0 那轮就漏了）。锁文件的根版本只是元数据、不影响构建，但 `npm install --package-lock-only`
+> 一条命令就能同步，升版收尾顺手跑一下；当时上表又从四处扩成五处。
 
 ### 1.3 Tauri 版本一致性（**最容易踩，且会让构建直接失败**）
 
@@ -172,7 +185,7 @@ cd ..
 
 ### 1.6 验收脚本全绿
 
-界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑：
+界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑。下面是最小集；完整验收链见 [`AGENTS.md`](../AGENTS.md) 的「改完怎么验」：
 
 ```powershell
 node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/nav_check.mjs; node scripts/recent_check.mjs; node scripts/dev_bg.mjs stop
@@ -186,7 +199,7 @@ node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motio
 
 - [ ] `git status --short` 输出为空
 - [ ] `git log --oneline main..origin/main` 输出为空（远端无新提交）
-- [ ] 版本号三处一致
+- [ ] 版本号五处一致
 - [ ] `npx tauri info` **无** `Found version mismatched` 报错
 - [ ] `npm run build` 通过
 - [ ] `cargo check` 通过
@@ -386,7 +399,7 @@ git rev-parse origin/main
 浏览器打开（把 `<你的用户名>` 换成 `XU-QiYi`）：
 
 ```
-https://github.com/XU-QiYi/mouseTool-theme/releases/new
+https://github.com/XU-QiYi/mousetool-theme/releases/new
 ```
 
 ### 4.2 选择 tag —— 最关键的一步
@@ -467,8 +480,8 @@ A：不支持。本应用依赖 Windows 注册表与光标 API，只在 Windows 
 
 ---
 
-📖 使用文档与源码：<https://github.com/XU-QiYi/mouseTool-theme>
-🐛 问题反馈：<https://github.com/XU-QiYi/mouseTool-theme/issues>
+📖 使用文档与源码：<https://github.com/XU-QiYi/mousetool-theme>
+🐛 问题反馈：<https://github.com/XU-QiYi/mousetool-theme/issues>
 ```
 
 > **写法建议**：正文用「用户视角」写——他们关心的是"能不能装、装完怎么用、出问题怎么办"，
@@ -584,8 +597,8 @@ git add -A
 git commit -m "fix: <问题描述>"
 git push origin main
 
-# ② 三处版本号改成 0.1.1
-#    package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json
+# ② 按 §1.2 的五处版本号改成 0.1.1
+#    package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json / src/lib/app-meta.ts / package-lock.json
 
 # ③ 重新构建
 npm run tauri build -- --ci --bundles nsis
@@ -804,7 +817,7 @@ npx tauri info                        # 必须无 version mismatch 报错
 npm run build                         # 必须通过
 cd src-tauri; cargo check; cd ..
 
-# 2. 验收脚本
+# 2. 验收脚本（最小集；完整链见 AGENTS「改完怎么验」）
 node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/nav_check.mjs; node scripts/dev_bg.mjs stop
 
 # 3. 构建
@@ -821,7 +834,7 @@ git tag -a v0.1.0 -m "鼠标主题工具 v0.1.0"
 git push origin v0.1.0
 git rev-parse v0.1.0; git rev-parse origin/main   # 两行必须相同
 
-# 6. 打开 https://github.com/XU-QiYi/mouseTool-theme/releases/new
+# 6. 打开 https://github.com/XU-QiYi/mousetool-theme/releases/new
 #    选已有 tag v0.1.0 → 填标题 → 贴正文 → 拖入产物 → Publish release
 
 # 7. 校验

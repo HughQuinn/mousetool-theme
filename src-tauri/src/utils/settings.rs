@@ -18,11 +18,17 @@ use serde::{Deserialize, Serialize};
 use crate::utils::{limits, paths};
 
 /// 关闭主窗口时的行为
+///
+/// 拦截在 Rust 侧（`lib.rs` 的关窗事件），三种行为各自的出口：
+/// exit 不拦；tray 藏窗；ask 发 `close-ask` 事件交给前端弹询问框（决策 57）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseBehavior {
-    /// 关窗口即退出进程（默认）
+    /// 关窗口先弹询问（默认，决策 57）：缩到托盘还是退出由用户当场选，
+    /// 勾「不再询问」后这次的选择经 `update_settings` 成为新的关闭行为
     #[default]
+    Ask,
+    /// 关窗口即退出进程
     Exit,
     /// 关窗口缩到托盘，进程继续跑，托盘里能叫回窗口或退出
     Tray,
@@ -31,6 +37,7 @@ pub enum CloseBehavior {
 impl CloseBehavior {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Ask => "ask",
             Self::Exit => "exit",
             Self::Tray => "tray",
         }
@@ -39,9 +46,12 @@ impl CloseBehavior {
     /// 前端传来的字符串 → 枚举；不给静默默认，传错了要说出来
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
+            "ask" => Ok(Self::Ask),
             "exit" => Ok(Self::Exit),
             "tray" => Ok(Self::Tray),
-            other => Err(format!("不认识的关闭行为「{other}」（应为 exit 或 tray）")),
+            other => Err(format!(
+                "不认识的关闭行为「{other}」（应为 ask、exit 或 tray）"
+            )),
         }
     }
 }
@@ -66,12 +76,34 @@ pub struct AppSettings {
     /// 光标守护：启动或检测到外部改写时自动恢复上次使用的主题（逻辑在前端，
     /// 见 `lib/cursor-guard.ts`；这里只存偏好）
     pub cursor_guard_enabled: bool,
+    /// 自动备份：每天第一份备份落进「备份历史」（触发逻辑在前端，见
+    /// `lib/auto-backup.ts`；当日去重与过期清理在 `commands/backup.rs`）
+    pub auto_backup_enabled: bool,
+    /// 自动备份保留份数：超出就删最旧的自动备份，手动备份不受影响
+    pub auto_backup_keep: u32,
+    /// 定时切换主题：时间段内 / 外应用配对主题（逻辑在前端，见
+    /// `lib/schedule-switch.ts`；这里只存偏好）
+    pub schedule_switch_enabled: bool,
+    /// 时间段起点，24 小时制 `HH:MM`
+    pub schedule_start: String,
+    /// 时间段终点，24 小时制 `HH:MM`；小于起点视为跨零点区间
+    pub schedule_end: String,
+    /// 时间段内使用的主题 ID；`None` = 期间内不切换
+    pub schedule_in_id: Option<String>,
+    /// 时间段外使用的主题 ID；`None` = 期间外不切换
+    pub schedule_out_id: Option<String>,
+    /// 定时轮换主题：按固定间隔在「我的主题」里轮着应用（逻辑在前端，见
+    /// `lib/theme-rotate.ts`；这里只存偏好）。默认关闭，且是优先级最低的
+    /// 自动行为——定时切换 / 跟随系统开启时让位（决策 55）
+    pub rotate_enabled: bool,
+    /// 轮换间隔（分钟）；合法范围 15–1440，由 `update_settings` 校验
+    pub rotate_interval_minutes: u32,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            close_behavior: CloseBehavior::Exit,
+            close_behavior: CloseBehavior::Ask,
             themes_dir: None,
             auto_check_update: true,
             shortcuts_enabled: true,
@@ -79,8 +111,34 @@ impl Default for AppSettings {
             auto_switch_light_id: None,
             auto_switch_dark_id: None,
             cursor_guard_enabled: false,
+            auto_backup_enabled: false,
+            auto_backup_keep: 10,
+            schedule_switch_enabled: false,
+            schedule_start: "09:00".to_string(),
+            schedule_end: "18:00".to_string(),
+            schedule_in_id: None,
+            schedule_out_id: None,
+            rotate_enabled: false,
+            rotate_interval_minutes: 60,
         }
     }
+}
+
+/// 校验 `HH:MM`（24 小时制）：定时切换的时间段两端都要能落到一天之内
+pub fn validate_hhmm(raw: &str) -> Result<(), String> {
+    let invalid = || format!("时间要写成 24 小时制的 HH:MM（收到「{raw}」）");
+    let bytes = raw.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return Err(invalid());
+    }
+    let (hour, minute) = raw.split_at(2);
+    let minute = &minute[1..];
+    let hour: u32 = hour.parse().map_err(|_| invalid())?;
+    let minute: u32 = minute.parse().map_err(|_| invalid())?;
+    if hour > 23 || minute > 59 {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 pub fn settings_file() -> Result<PathBuf, String> {
@@ -267,7 +325,7 @@ mod tests {
         let _ = fs::remove_file(&missing);
 
         let loaded = load_from(&missing);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(loaded.warnings.is_empty(), "第一次运行不该报警");
     }
 
@@ -280,7 +338,7 @@ mod tests {
         fs::write(&broken, "{ 不是 json").expect("写坏文件");
 
         let loaded = load_from(&broken);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(loaded.settings.auto_check_update, "默认开启自动检查");
         assert_eq!(loaded.warnings.len(), 1, "损坏要能被界面说明");
         assert!(
@@ -328,7 +386,7 @@ mod tests {
         fs::write(&path, raw).expect("写超大设置");
 
         let loaded = load_from(&path);
-        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Ask);
         assert!(
             loaded.warnings[0].contains("上限"),
             "警告要说清尺寸超限：{}",
@@ -397,10 +455,121 @@ mod tests {
     }
 
     #[test]
-    fn 关闭行为的字符串解析只认两个值() {
+    fn 自动备份默认关闭且保留份数写读往返() {
+        let file = temp_file("auto-backup");
+        assert!(
+            !AppSettings::default().auto_backup_enabled,
+            "默认必须是关：不能在用户不知情时天天写备份文件"
+        );
+        assert_eq!(AppSettings::default().auto_backup_keep, 10);
+
+        let settings = AppSettings {
+            auto_backup_enabled: true,
+            auto_backup_keep: 20,
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.auto_backup_enabled);
+        assert_eq!(loaded.auto_backup_keep, 20);
+
+        // 旧版本文件没有这两个字段：走默认，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"tray"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.auto_backup_enabled, "缺字段应补默认 false");
+        assert_eq!(loaded.auto_backup_keep, 10, "缺字段应补默认 10");
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 定时切换默认关闭且时间段与映射写读往返() {
+        let file = temp_file("schedule");
+        assert!(
+            !AppSettings::default().schedule_switch_enabled,
+            "默认必须是关：不能凭空替用户换主题"
+        );
+        assert_eq!(AppSettings::default().schedule_start, "09:00");
+        assert_eq!(AppSettings::default().schedule_end, "18:00");
+
+        let settings = AppSettings {
+            schedule_switch_enabled: true,
+            schedule_start: "22:00".to_string(),
+            schedule_end: "06:00".to_string(),
+            schedule_in_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            schedule_out_id: Some("sys_windows_default".to_string()),
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.schedule_switch_enabled);
+        assert_eq!(loaded.schedule_start, "22:00");
+        assert_eq!(loaded.schedule_end, "06:00");
+        assert_eq!(
+            loaded.schedule_in_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(loaded.schedule_out_id.as_deref(), Some("sys_windows_default"));
+
+        // 旧版本文件缺字段：时间补默认，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"exit"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.schedule_switch_enabled);
+        assert_eq!(loaded.schedule_start, "09:00");
+        assert_eq!(loaded.schedule_end, "18:00");
+        assert!(loaded.schedule_in_id.is_none());
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 定时轮换默认关闭且间隔写读往返() {
+        let file = temp_file("rotate");
+        assert!(
+            !AppSettings::default().rotate_enabled,
+            "默认必须是关：不能凭空替用户换主题"
+        );
+        assert_eq!(AppSettings::default().rotate_interval_minutes, 60);
+
+        let settings = AppSettings {
+            rotate_enabled: true,
+            rotate_interval_minutes: 240,
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.rotate_enabled);
+        assert_eq!(loaded.rotate_interval_minutes, 240);
+
+        // 旧版本文件缺字段：开关补默认关、间隔补 60，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"exit"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.rotate_enabled);
+        assert_eq!(loaded.rotate_interval_minutes, 60);
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 时间校验只认合法的时分() {
+        assert!(validate_hhmm("00:00").is_ok());
+        assert!(validate_hhmm("23:59").is_ok());
+        assert!(validate_hhmm("09:05").is_ok());
+        assert!(validate_hhmm("24:00").is_err(), "小时越界要拒绝");
+        assert!(validate_hhmm("09:60").is_err(), "分钟越界要拒绝");
+        assert!(validate_hhmm("9:00").is_err(), "位数不足要拒绝");
+        assert!(validate_hhmm("0900").is_err(), "缺冒号要拒绝");
+        assert!(validate_hhmm("ab:cd").is_err(), "非数字要拒绝");
+        assert!(validate_hhmm("").is_err());
+    }
+
+    #[test]
+    fn 关闭行为的字符串解析只认三个值() {
+        assert_eq!(CloseBehavior::parse("ask").unwrap(), CloseBehavior::Ask);
         assert_eq!(CloseBehavior::parse("exit").unwrap(), CloseBehavior::Exit);
         assert_eq!(CloseBehavior::parse("tray").unwrap(), CloseBehavior::Tray);
         assert!(CloseBehavior::parse("minimize").is_err());
+        assert_eq!(CloseBehavior::Ask.as_str(), "ask");
         assert_eq!(CloseBehavior::Tray.as_str(), "tray");
+        // 新装默认是「每次询问」（决策 57）；已有用户的 settings.json 存的是
+        // 显式值，不受默认调整影响
+        assert_eq!(AppSettings::default().close_behavior, CloseBehavior::Ask);
     }
 }

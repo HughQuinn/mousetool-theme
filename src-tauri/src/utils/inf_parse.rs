@@ -97,15 +97,15 @@ fn parse_text(text: &str) -> Vec<(&'static str, String)> {
 
 /// BOM 识别 UTF-16LE / UTF-16BE / UTF-8；无 BOM 按宽松 UTF-8（GBK 中文会变
 /// 替换符，但槽位键名是 ASCII，解析不受影响）
-fn decode_text(bytes: &[u8]) -> String {
+pub(crate) fn decode_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return utf16_to_string(
-            bytes[2..].chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])),
+            bytes[2..].as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)),
         );
     }
     if bytes.starts_with(&[0xFE, 0xFF]) {
         return utf16_to_string(
-            bytes[2..].chunks_exact(2).map(|p| u16::from_be_bytes([p[0], p[1]])),
+            bytes[2..].as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)),
         );
     }
     let rest = bytes

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, CircleCheck, Copy, RefreshCw, Stethoscope, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleCheck, Copy, RefreshCw, ScrollText, Stethoscope, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -12,14 +12,17 @@ import {
 import { StatusBadge } from "@/components/ui/status-badge";
 import { SettingCard } from "@/components/settings/SettingCard";
 import { useAppVersion } from "@/hooks/use-app-version";
-import { toast } from "@/lib/toast";
+import { toast, readableError } from "@/lib/toast";
 import { appliedAtMachine } from "@/lib/themes";
-import { getWindowsVersion } from "@/services/system";
+import { formatBytes } from "@/lib/utils";
+import { getWindowsVersion, openLogDir } from "@/services/system";
+import { findDuplicateThemes, type DuplicateReport } from "@/services/theme";
+import { inTauri } from "@/services/theme";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { cn } from "@/lib/utils";
 
-/** 严重度：ok < warning < error，整体取四项最大值 */
+/** 严重度：ok < warning < error，整体取五项最大值 */
 type Severity = "ok" | "warning" | "error";
 
 const SEVERITY_ORDER: Record<Severity, number> = { ok: 0, warning: 1, error: 2 };
@@ -79,11 +82,13 @@ function localStamp(): string {
  *
  * 检查数据全部从现有 store 派生（`useMemo` 组装，不写 selector），
  * 不新增命令、不做任何写操作。严重度只用结构化状态判定
- * （loadError / dataDirError / autostartError / warnings），不从错误文本猜分类。
+ * （loadError / dataDirError / autostartError / warnings / fileGaps），
+ * 不从错误文本猜分类。
  */
 export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps) {
   const version = useAppVersion();
   const themes = useThemeStore((s) => s.themes);
+  const fileGaps = useThemeStore((s) => s.fileGaps);
   const loadError = useThemeStore((s) => s.loadError);
   const warnings = useThemeStore((s) => s.warnings);
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
@@ -97,11 +102,18 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
   const settingsError = useSettingsStore((s) => s.settingsError);
   const autostart = useSettingsStore((s) => s.autostart);
   const autostartError = useSettingsStore((s) => s.autostartError);
+  const verifyReports = useSettingsStore((s) => s.backupVerifyReports);
 
   const [selectedId, setSelectedId] = useState<string>("data-dir");
   const [scannedAt, setScannedAt] = useState<string>(localStamp);
   const [scanning, setScanning] = useState(false);
   const [windows, setWindows] = useState<string>("…");
+  /** 查重（决策 38）是诊断里唯一的按需命令：重 I/O（逐字节比对），打开 / 重扫时跑一次 */
+  const [dupScan, setDupScan] = useState<{
+    loading: boolean;
+    report: DuplicateReport | null;
+    error: string | null;
+  }>({ loading: false, report: null, error: null });
 
   // 打开时刷新一次系统版本（只读静态信息，失败保留「未知」）
   useEffect(() => {
@@ -111,11 +123,28 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
       .catch(() => setWindows("未知"));
   }, [open]);
 
+  const runDedupScan = useCallback(async () => {
+    setDupScan({ loading: true, report: null, error: null });
+    try {
+      const report = await findDuplicateThemes();
+      setDupScan({ loading: false, report, error: null });
+    } catch (err) {
+      console.error("主题查重失败：", err);
+      setDupScan({ loading: false, report: null, error: readableError(err) });
+    }
+  }, []);
+
+  // 打开 / 重新扫描时跑查重；结果只在弹窗会话内有效（库随时会变）
+  useEffect(() => {
+    if (open) void runDedupScan();
+  }, [open, runDedupScan]);
+
   const checks = useMemo<DiagnosticCheck[]>(() => {
     const builtIn = themes.filter((theme) => theme.is_built_in).length;
     const mine = themes.length - builtIn;
     const activeTheme = themes.find((theme) => theme.id === activeThemeId) ?? null;
     const activeMissing = Boolean(activeThemeId) && !activeTheme;
+    const dupGroups = dupScan.report?.groups ?? [];
 
     return [
       {
@@ -190,9 +219,13 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
         severity: settingsError ? "error" : autostartError || !autostart ? "warning" : "ok",
         summary: settingsError
           ? "读取失败"
-          : `关闭行为：${settings?.close_behavior === "tray" ? "最小化到托盘" : "直接退出"} · 自启动：${
-              autostart ? (autostart.enabled ? "已开启" : "未开启") : "未读到"
-            }`,
+          : `关闭行为：${
+              settings?.close_behavior === "tray"
+                ? "最小化到托盘"
+                : settings?.close_behavior === "ask"
+                  ? "每次询问"
+                  : "直接退出"
+            } · 自启动：${autostart ? (autostart.enabled ? "已开启" : "未开启") : "未读到"}`,
         evidence: [settingsError ?? autostartError ?? "settings.json 与自启动注册表读取正常"],
         advice: settingsError
           ? "重启应用通常可以恢复（典型原因：前端新、Rust 旧）"
@@ -204,8 +237,91 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
           run: () => useThemeStore.getState().setSettingsSection("general"),
         },
       },
+      {
+        id: "file-gaps",
+        title: "文件完整性",
+        severity: fileGaps.length > 0 ? "warning" : "ok",
+        summary:
+          fileGaps.length === 0
+            ? "全部主题的光标文件都在"
+            : `${fileGaps.length} 套主题的光标文件缺失`,
+        evidence:
+          fileGaps.length === 0
+            ? ["每套主题声明了的槽位文件都能读到（只查存在性，内容损坏由预览占位图兜底）"]
+            : [
+                ...fileGaps.slice(0, 6).map((gap) => {
+                  const name = themes.find((theme) => theme.id === gap.theme_id)?.name ?? gap.theme_id;
+                  const shown = gap.slots.slice(0, 4).join("、");
+                  return `「${name}」缺 ${gap.slots.length} 个文件（${shown}${gap.slots.length > 4 ? " 等" : ""}）`;
+                }),
+                ...(fileGaps.length > 6 ? [`还有 ${fileGaps.length - 6} 套主题有缺口`] : []),
+              ],
+        advice:
+          fileGaps.length > 0
+            ? "重新导入这些主题，或到「我的主题」删除；文件缺失只影响该主题本身，应用后缺失槽位会被写成空"
+            : null,
+        action:
+          fileGaps.length > 0
+            ? {
+                label: "去「我的主题」",
+                run: () => {
+                  onOpenChange(false);
+                  useThemeStore.getState().setCurrentPage("mine");
+                },
+              }
+            : undefined,
+      },
+      {
+        id: "duplicates",
+        title: "重复主题",
+        severity: dupScan.error ? "error" : dupGroups.length > 0 ? "warning" : "ok",
+        summary: dupScan.loading
+          ? "正在比对…"
+          : dupScan.error
+            ? "查重失败"
+            : dupGroups.length > 0
+              ? `${dupGroups.length} 组内容重复`
+              : "没有内容重复的主题",
+        evidence: dupScan.loading
+          ? ["正在逐套比对光标文件内容（先按槽位指纹预分组，组内逐字节确认）…"]
+          : dupScan.error
+            ? [dupScan.error]
+            : dupGroups.length === 0
+              ? [
+                  `已比对 ${dupScan.report?.scanned ?? 0} 套「我的主题」，没有内容完全一致的组`,
+                  ...(dupScan.report && dupScan.report.skipped_missing > 0
+                    ? [`${dupScan.report.skipped_missing} 套因槽位文件缺失未参与比对（见「文件完整性」）`]
+                    : []),
+                  "口径：非空槽位文件逐字节一致才算重复；只比内容，不看名字与导入时间",
+                ]
+              : [
+                  ...dupGroups.slice(0, 6).map((group) => {
+                    const names = group.theme_names.map((name) => `「${name}」`).join("");
+                    return `${names} 内容相同（${group.slots_filled} 个槽位 · 各 ${formatBytes(group.bytes)}）`;
+                  }),
+                  ...(dupGroups.length > 6 ? [`还有 ${dupGroups.length - 6} 组重复`] : []),
+                  `删到每组剩一套，可省 ${formatBytes(dupScan.report?.wasted_bytes ?? 0)}`,
+                ],
+        advice: dupScan.loading
+          ? null
+          : dupScan.error
+            ? "点「重新扫描」重试；查重只读文件，不影响任何数据"
+            : dupGroups.length > 0
+              ? "每组删到剩一套即可：到「我的主题」用「批量整理」勾选多余副本，一次移入回收站（可反悔）"
+              : null,
+        action:
+          dupGroups.length > 0
+            ? {
+                label: "去「我的主题」",
+                run: () => {
+                  onOpenChange(false);
+                  useThemeStore.getState().setCurrentPage("mine");
+                },
+              }
+            : undefined,
+      },
     ];
-  }, [themes, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
+  }, [themes, fileGaps, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, dupScan, onOpenChange]);
 
   const overall = checks.reduce<Severity>(
     (worst, check) =>
@@ -218,12 +334,13 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
     if (scanning) return;
     setScanning(true);
     try {
-      // 只读重扫：四个来源并行重读，完成后更新扫描时间
+      // 只读重扫：五个来源并行重读，完成后更新扫描时间
       await Promise.all([
         useThemeStore.getState().loadThemes(),
         useThemeStore.getState().loadDataDir(),
         loadSettings(),
         loadAutostart(),
+        runDedupScan(),
       ]);
       setScannedAt(localStamp());
     } finally {
@@ -231,7 +348,21 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
     }
   };
 
+  /** 打开数据根下的日志目录（决策 46）：报障时用户能直接把日志文件发上来 */
+  const openLogs = async () => {
+    try {
+      const dir = await openLogDir();
+      toast.success("已打开日志目录", inTauri ? dir : "开发模式：未真正打开系统目录");
+    } catch (err) {
+      console.error("打开日志目录失败：", err);
+      toast.error("打开失败", readableError(err));
+    }
+  };
+
   const copyReport = async () => {
+    // 备份体检快照（决策 37/42 修订）：store 里会话内的体检结果随报告走，
+    // 报障时对方能看到「哪份备份体检过、结果如何」；没跑过体检就没有这一段
+    const verifyEntries = Object.values(verifyReports);
     const lines = [
       `鼠标主题工具 v${version}`,
       `系统：${windows}`,
@@ -241,6 +372,19 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
         `[${SEVERITY_LABEL[check.severity]}] ${check.title}：${check.summary}`,
         ...check.evidence.map((line) => `  ${line}`),
       ]),
+      ...(verifyEntries.length > 0
+        ? [
+            "",
+            "备份体检快照（本次会话内手动体检的结果）：",
+            ...verifyEntries.map((report) => {
+              const verdict =
+                report.corrupt_total > 0
+                  ? `损坏 ${report.corrupt_total} 处（${report.corrupt[0]}）`
+                  : `通过（${report.entries_checked} 个条目）`;
+              return `  ${report.file_name}：${verdict}`;
+            }),
+          ]
+        : []),
     ];
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
@@ -262,7 +406,7 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
             <div className="min-w-0">
               <DialogTitle>诊断中心</DialogTitle>
               <DialogDescription>
-                检查数据目录、主题、当前使用与设置；只读，不修改任何文件
+                检查数据目录、主题、当前使用、设置与重复内容；只读，不修改任何文件
               </DialogDescription>
             </div>
             <span className="pt-1 shrink-0">
@@ -272,8 +416,8 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
             </span>
           </div>
 
-          {/* 顶部摘要：四项各一块，严重度图标 + 标题 + 一行结论 */}
-          <div className="mt-4 grid grid-cols-4 gap-2">
+          {/* 顶部摘要：六项各一块，严重度图标 + 标题 + 一行结论 */}
+          <div className="mt-4 grid grid-cols-3 gap-2">
             {checks.map((check) => (
               <button
                 key={check.id}
@@ -378,6 +522,10 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
                 <Copy data-icon="inline-start" />
                 复制报告
               </Button>
+              <Button size="sm" variant="outline" onClick={() => void openLogs()}>
+                <ScrollText data-icon="inline-start" />
+                打开日志目录
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
                 关闭
               </Button>
@@ -396,7 +544,7 @@ export function DiagnosticsCard() {
     <>
       <SettingCard
         title="诊断中心"
-        description="检查数据目录、主题数据、当前使用与应用设置；只读，不修改任何文件"
+        description="检查数据目录、主题数据、当前使用、应用设置与重复内容；只读，不修改任何文件"
         action={
           <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
             <Stethoscope data-icon="inline-start" />

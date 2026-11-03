@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { noteDevCloseAskAction } from "@/lib/close-ask";
 import { inTauri } from "@/services/theme";
 
 /** 浏览器演示用的程序路径 */
@@ -52,4 +53,31 @@ export function takePendingImport(): Promise<string | null> {
     return Promise.resolve(null);
   }
   return invoke<string | null>("take_pending_import");
+}
+
+/** 打开数据根下的日志目录（决策 46）；浏览器里给演示路径 */
+export function openLogDir(): Promise<string> {
+  if (!inTauri) {
+    console.warn("[dev] 非 Tauri 环境，模拟打开日志目录");
+    return Promise.resolve("C:\\Users\\demo\\AppData\\Local\\CursorStudio\\logs");
+  }
+  return invoke<string>("open_log_dir");
+}
+
+/** 关窗询问里选「最小化到托盘」的一次性执行（决策 57）；浏览器里只记日志 */
+export function hideWindowToTray(): Promise<void> {
+  if (!inTauri) {
+    noteDevCloseAskAction("hide-to-tray");
+    return Promise.resolve();
+  }
+  return invoke<void>("hide_window_to_tray");
+}
+
+/** 关窗询问里选「退出应用」（决策 57）；浏览器里只记日志 */
+export function exitApp(): Promise<void> {
+  if (!inTauri) {
+    noteDevCloseAskAction("exit");
+    return Promise.resolve();
+  }
+  return invoke<void>("exit_app");
 }

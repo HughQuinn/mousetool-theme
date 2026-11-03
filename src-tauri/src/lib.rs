@@ -2,21 +2,27 @@ pub mod commands;
 pub mod models;
 pub mod utils;
 
-use commands::backup::{delete_backup, export_backup, import_backup, list_backups};
+use commands::backup::{
+    delete_backup, export_backup, import_backup, list_backup_themes, list_backups,
+    restore_theme_from_backup, run_auto_backup, verify_backup,
+};
 use commands::cursor::get_cursor_preview;
-use commands::data::{get_data_dir, open_data_dir};
+use commands::data::{clear_history, get_data_dir, get_storage_stats, open_data_dir, open_log_dir};
 use commands::settings::{
     get_autostart, get_settings, preview_themes_dir, set_autostart, set_themes_dir, update_settings,
 };
 use commands::system::{
-    get_windows_version, get_zip_menu_registered, open_mouse_panel, set_zip_menu,
-    take_pending_import,
+    exit_app, get_windows_version, get_zip_menu_registered, hide_window_to_tray, open_mouse_panel,
+    set_zip_menu, take_pending_import,
 };
 use commands::theme::{
-    apply_theme, delete_theme, export_theme, get_active_state, get_all_themes, import_theme,
-    rename_theme, restore_default, save_current_theme,
+    apply_theme, delete_theme, delete_themes, export_all_themes, export_theme,
+    find_duplicate_themes, get_active_state, get_all_themes, import_theme, rename_theme,
+    restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
+use tauri::{Emitter, Listener, Manager};
+use utils::log;
 use utils::settings::{self, CloseBehavior};
 use utils::{integration, tray};
 
@@ -25,22 +31,58 @@ pub fn run() {
     // 单实例 + 右键菜单 `--import` 转交：已有实例时这里可能直接退出进程
     integration::handle_launch();
 
+    // 每次会话一条启动标记：报障时日志能对上「当时用的是哪个版本」
+    log::info("app", &format!("应用启动（版本 {}）", env!("CARGO_PKG_VERSION")));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // 托盘按设置决定有无：关闭行为是「最小化到托盘」才有图标
             tray::sync(app.handle());
+            // 二次启动唤回隐藏窗的信号由这个线程接收（integration::handle_launch
+            // 在首实例分支创建了事件），显示动作派回主线程执行
+            integration::spawn_show_waiter(app.handle().clone());
+            // 主窗 `visible: false` 起步（tauri.conf.json）：等开屏遮罩挂载好
+            // （前端发 splash-ready）再显示——用户看到的第一帧就是完整的开屏，
+            // 没有先白窗后遮罩的空档。显示统一走 tray::show_window，
+            // ask 模式下托盘的有无随之重算
+            let handle = app.handle().clone();
+            app.listen("splash-ready", move |_| {
+                tray::show_window(&handle);
+            });
+            // 兜底：前端起不来（dev 时 vite 挂了、JS 崩了）也不能让用户
+            // 对着一台没有窗口的进程；正常启动约 1s 内就会收到 splash-ready
+            let fallback = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if !tray::ever_shown() {
+                    log::warn("app", "前端 10 秒未就绪（未收到 splash-ready），兜底显示主窗口");
+                    tray::show_window(&fallback);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 关闭行为 = 最小化到托盘：拦下关闭，藏窗继续跑（托盘能叫回来）
+            // 关闭行为在 Rust 侧拦截（settings.json 存的就是给这里读的）：
+            // - tray：拦下关闭，藏窗继续跑（托盘能叫回来）
+            // - ask（决策 57）：拦下关闭，发 `close-ask` 事件交给前端弹询问框；
+            //   页面尚未就绪时事件会丢、窗口保持打开，再关一次即可
+            // - exit：不拦，按默认行为退出
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main"
-                    && settings::read().close_behavior == CloseBehavior::Tray
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
+                if window.label() != "main" {
+                    return;
+                }
+                match settings::read().close_behavior {
+                    CloseBehavior::Tray => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    CloseBehavior::Ask => {
+                        api.prevent_close();
+                        let _ = window.app_handle().emit("close-ask", ());
+                    }
+                    CloseBehavior::Exit => {}
                 }
             }
         })
@@ -53,15 +95,23 @@ pub fn run() {
             save_current_theme,
             import_theme,
             delete_theme,
+            delete_themes,
             rename_theme,
             export_theme,
+            export_all_themes,
+            find_duplicate_themes,
             get_data_dir,
             open_data_dir,
+            open_log_dir,
+            get_storage_stats,
+            clear_history,
             get_windows_version,
             open_mouse_panel,
             get_zip_menu_registered,
             set_zip_menu,
             take_pending_import,
+            hide_window_to_tray,
+            exit_app,
             get_settings,
             update_settings,
             get_autostart,
@@ -71,7 +121,11 @@ pub fn run() {
             export_backup,
             import_backup,
             list_backups,
+            list_backup_themes,
+            restore_theme_from_backup,
             delete_backup,
+            verify_backup,
+            run_auto_backup,
             list_trash,
             restore_from_trash,
             delete_from_trash,

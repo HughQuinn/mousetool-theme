@@ -8,11 +8,12 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{
-    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemesResult,
+    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemeApplyCount, ThemeFileGap,
+    ThemesResult,
 };
 use crate::utils::{
-    capture, history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash,
-    validation,
+    capture, history, importer, inf_export, limits, ops, paths, progress, registry, theme_paths,
+    trash, tray, validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -49,26 +50,78 @@ fn merge_sources(
     (themes, warnings)
 }
 
-/// 路径比较口径：Windows 路径不区分大小写，正反斜杠等价
+/// 剥掉 canonicalize 产生的扩展长度前缀
 ///
-/// `\\?\` 是 canonicalize 产生的扩展长度前缀：应用系统方案时写入注册表的是
-/// canonicalize 后的路径，而方案列表读出来的是普通路径（环境变量已展开），
-/// 不剥掉前缀同一套光标会被判成两套——状态卡误报「被系统设置修改」。
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim().replace('/', "\\");
-    let stripped = trimmed
-        .strip_prefix(r"\\?\UNC\")
+/// `\\?\` 会让 Win32 按字面量处理路径，反而挡住后面的短名展开；`\\?\UNC\` 要
+/// 还原成 `\\server\share` 才能和普通写法对上。
+fn strip_device_prefix(path: &str) -> String {
+    path.strip_prefix(r"\\?\UNC\")
         .map(|rest| format!(r"\\{rest}"))
-        .unwrap_or_else(|| trimmed.strip_prefix(r"\\?\").unwrap_or(&trimmed).to_string());
-    stripped.to_lowercase()
+        .unwrap_or_else(|| path.strip_prefix(r"\\?\").unwrap_or(path).to_string())
+}
+
+/// 路径比较口径：两侧都落到同一个规范空间，而不是逐条补命名差异
+///
+/// 应用主题时写进注册表的是 `fs::canonicalize` 之后的路径，主题侧存的是拼接出来
+/// 的普通写法。只剥前缀加转小写挡不住这两类差异：Windows 的 8.3 短名（CI runner
+/// 的临时目录是 `C:\Users\RUNNER~1\...`，canonical 之后是 `...\runneradmin\...`，
+/// 同一个目录两种写法）和 reparse 点展开。所以普通写法也走一次 canonicalize。
+/// 展不动（文件已删）或本来就是相对路径（不该拿进程 CWD 去猜）时退回原写法，
+/// 与改动前行为一致。
+fn normalize_path(path: &str) -> String {
+    let plain = strip_device_prefix(&path.trim().replace('/', "\\"));
+    if plain.is_empty() || !Path::new(&plain).is_absolute() {
+        return plain.to_lowercase();
+    }
+    match fs::canonicalize(&plain) {
+        Ok(resolved) => strip_device_prefix(&resolved.to_string_lossy()).to_lowercase(),
+        Err(_) => plain.to_lowercase(),
+    }
+}
+
+/// 一轮扫描里复用注册表侧的归一化结果
+///
+/// `normalize_path` 会开文件句柄，而 `detect_active_theme` 要拿每套主题都跟同一份
+/// 注册表槽位比一遍；不缓存的话注册表侧那批 canonicalize 要按主题数重复付。
+struct PreparedCurrent<'a> {
+    raw: &'a [(String, String)],
+    normalized: Vec<Option<String>>,
+}
+
+impl<'a> PreparedCurrent<'a> {
+    fn new(current: &'a [(String, String)]) -> Self {
+        Self {
+            raw: current,
+            normalized: vec![None; current.len()],
+        }
+    }
+
+    /// 取第 index 个槽位的归一化路径，第一次被碰到才付那次 canonicalize
+    fn path_at(&mut self, index: usize) -> &str {
+        if self.normalized[index].is_none() {
+            self.normalized[index] = Some(normalize_path(&self.raw[index].1));
+        }
+        self.normalized[index].as_deref().unwrap_or_default()
+    }
 }
 
 /// 主题与注册表里当前生效的光标是否为同一套
+fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> bool {
+    let mut prepared = PreparedCurrent::new(current);
+    theme_matches_prepared(theme, &mut prepared)
+}
+
+/// 同上，但复用调用方备好的注册表侧缓存
 ///
 /// 双向覆盖：主题定义的槽位都要能在注册表里对上，注册表里的非空槽位也要都能
 /// 在主题里找到。只查单向会把「某主题是当前方案的子集」误判成正在使用。
-fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> bool {
-    if current.is_empty() {
+///
+/// 逐槽惰性比较，而不是先把两侧整个归一化：绝大多数主题在第一个槽位就该被挡掉，
+/// 让它们白付一整套开句柄不值。反向覆盖留到正向全中之后再查——那一步本来就只
+/// 可能发生在真正匹配的那一套上，代价不会摊到所有主题头上。
+fn theme_matches_prepared(theme: &CursorTheme, current: &mut PreparedCurrent) -> bool {
+    let raw = current.raw;
+    if raw.is_empty() {
         return false;
     }
 
@@ -77,19 +130,30 @@ fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> b
         .iter()
         .filter(|slot| !slot.file_path.trim().is_empty())
         .collect();
-
-    if theme_slots.len() != current.len() {
+    if theme_slots.len() != raw.len() {
         return false;
     }
 
-    theme_slots.iter().all(|slot| {
-        current.iter().any(|(key, path)| {
-            *key == slot.registry_key && normalize_path(path) == normalize_path(&slot.file_path)
-        })
-    }) && current.iter().all(|(key, path)| {
-        theme_slots.iter().any(|slot| {
-            slot.registry_key == *key && normalize_path(&slot.file_path) == normalize_path(path)
-        })
+    let mut normalized: Vec<(&str, String)> = Vec::with_capacity(theme_slots.len());
+    for slot in &theme_slots {
+        let path = normalize_path(&slot.file_path);
+        let matched = (0..raw.len())
+            .any(|index| raw[index].0 == slot.registry_key && current.path_at(index) == path);
+        if !matched {
+            return false;
+        }
+        normalized.push((slot.registry_key.as_str(), path));
+    }
+
+    // 反向覆盖：注册表里每个非空槽位都得被某个主题槽位认领。数量相等并不保证
+    // 正向命中就蕴含反向命中——主题里两个重复的槽位键会同时认领同一个注册表
+    // 槽位，把另一个留空（手改过的 theme.json 就会出现这种主题）
+    (0..raw.len()).all(|index| {
+        let key = raw[index].0.as_str();
+        let path = current.path_at(index);
+        normalized
+            .iter()
+            .any(|(other_key, other_path)| *other_key == key && other_path.as_str() == path)
     })
 }
 
@@ -102,9 +166,10 @@ fn detect_active_theme(
     current: &[(String, String)],
     scheme_name: &str,
 ) -> Option<String> {
+    let mut prepared = PreparedCurrent::new(current);
     let candidates: Vec<&CursorTheme> = themes
         .iter()
-        .filter(|theme| theme_matches_current(theme, current))
+        .filter(|theme| theme_matches_prepared(theme, &mut prepared))
         .collect();
 
     let chosen = candidates
@@ -119,11 +184,11 @@ fn detect_active_theme(
 ///
 /// `read_current_slots` 只返回非空槽位，所以它的长度就是非空槽位数。
 /// 注册表读失败时不猜：既不标主题也不判外部改写，把原因带回给调用方。
-struct ActiveInfo {
-    id: Option<String>,
-    filled: usize,
-    external: bool,
-    warning: Option<String>,
+pub(crate) struct ActiveInfo {
+    pub id: Option<String>,
+    pub filled: usize,
+    pub external: bool,
+    pub warning: Option<String>,
 }
 
 fn probe_active(themes: &[CursorTheme]) -> ActiveInfo {
@@ -164,7 +229,39 @@ pub async fn get_all_themes() -> Result<ThemesResult, String> {
         .map_err(|err| format!("读取主题列表任务异常退出（{err}）"))?
 }
 
-fn all_themes() -> Result<ThemesResult, String> {
+/// 聚合完成的主题快照：清单 + 反推的使用状态 + 派生的最近主题
+///
+/// 界面命令与托盘菜单（决策 30）要的是同一份事实，抽出来共用，
+/// 两边对「当前是谁、最近用过什么」的答案才不会漂移。
+pub(crate) struct ThemesSnapshot {
+    pub themes: Vec<CursorTheme>,
+    pub warnings: Vec<String>,
+    pub active: ActiveInfo,
+    pub recent: Vec<HistoryEntry>,
+    /// 各主题在事件流里的应用次数（决策 53）；托盘与聚焦重查用不到，随快照白带
+    pub apply_counts: Vec<ThemeApplyCount>,
+}
+
+impl ThemesSnapshot {
+    /// 无数据的空快照：托盘初建时先用它拼出「打开 / 退出」菜单，
+    /// 主题区随后由 `tray::refresh` 异步补齐，不在启动路径里做 I/O
+    pub(crate) fn empty() -> Self {
+        Self {
+            themes: Vec::new(),
+            warnings: Vec::new(),
+            active: ActiveInfo {
+                id: None,
+                filled: 0,
+                external: false,
+                warning: None,
+            },
+            recent: Vec::new(),
+            apply_counts: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn collect_snapshot() -> ThemesSnapshot {
     let (themes, mut warnings) = merge_sources(
         registry::read_system_schemes(),
         importer::read_user_themes(),
@@ -173,21 +270,53 @@ fn all_themes() -> Result<ThemesResult, String> {
     let active = probe_active(&themes);
     // 识别不出就当作「没有正在使用的主题」：少标一个「使用中」可以接受，
     // 标错了会让人以为已经应用成功
-    if let Some(warn) = active.warning {
+    if let Some(warn) = active.warning.clone() {
         warnings.push(warn);
     }
 
-    // 历史是附属数据：读坏了只提示，不影响主题列表
-    let (recent, history_warnings) = history::read_history();
+    // 历史是附属数据：读坏了只提示，不影响主题列表。
+    // 事件流只在这里读一次：去重派生「最近主题」，逐条数出「应用次数」（决策 53）
+    let (events, history_warnings) = history::read_events();
     warnings.extend(history_warnings);
+    let recent = history::recent_from_events(&events);
+    let apply_counts = history::counts_from_events(&events)
+        .into_iter()
+        .map(|(theme_id, count)| ThemeApplyCount { theme_id, count })
+        .collect();
 
-    Ok(ThemesResult {
+    ThemesSnapshot {
         themes,
         warnings,
-        active_theme_id: active.id,
-        current_slots_filled: active.filled,
-        active_external: active.external,
+        active,
         recent,
+        apply_counts,
+    }
+}
+
+fn all_themes() -> Result<ThemesResult, String> {
+    let snapshot = collect_snapshot();
+    // 文件完整性（决策 31）：读列表时顺带体检一遍。只 stat 不读内容，
+    // 15 槽位 × 主题数的代价可忽略；托盘与聚焦重查用不到它，不进 collect_snapshot
+    let file_gaps = snapshot
+        .themes
+        .iter()
+        .filter_map(|theme| {
+            let slots = theme_paths::missing_slots(theme);
+            (!slots.is_empty()).then(|| ThemeFileGap {
+                theme_id: theme.id.clone(),
+                slots,
+            })
+        })
+        .collect();
+    Ok(ThemesResult {
+        themes: snapshot.themes,
+        warnings: snapshot.warnings,
+        active_theme_id: snapshot.active.id,
+        current_slots_filled: snapshot.active.filled,
+        active_external: snapshot.active.external,
+        recent: snapshot.recent,
+        file_gaps,
+        apply_counts: snapshot.apply_counts,
     })
 }
 
@@ -232,9 +361,18 @@ pub async fn import_theme(
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("导入主题")?;
         let emitter = app.clone();
-        importer::import_source_report(&source_path, &mut |progress| {
+        let mut report = importer::import_source_report(&source_path, &mut |progress| {
             let _ = emitter.emit("import-progress", progress);
-        })
+        })?;
+        // 导入查重（决策 47）：复用决策 38 的指纹 + 逐字节确认，只提示不拦截。
+        // 查重本身没有失败通道，给不出结论（如缺文件）就当没有重复。
+        if let Some(name) = find_identical_theme_name(&report.theme) {
+            report.warnings.push(format!(
+                "与已有主题《{name}》内容完全相同（可到「我的主题」删除多余的一套）"
+            ));
+            report.duplicate_of = Some(name);
+        }
+        Ok(report)
     })
     .await
     .map_err(|err| format!("导入任务异常退出（{err}）"))?
@@ -265,10 +403,13 @@ fn checked_slots(theme: &CursorTheme) -> Result<Vec<CursorSlot>, String> {
 /// 顺带记一条「最近使用」。历史是附属信息：写失败不影响「已应用」这个事实，
 /// 但要把原因回传，由界面说明「光标切了，只是没记上」，不能静默吞掉。
 #[tauri::command]
-pub async fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || apply(&theme))
+pub async fn apply_theme(app: AppHandle, theme: CursorTheme) -> Result<ApplyOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || apply(&theme))
         .await
-        .map_err(|err| format!("应用主题任务异常退出（{err}）"))?
+        .map_err(|err| format!("应用主题任务异常退出（{err}）"))?;
+    // 菜单里的「最近使用」与勾选状态随应用结果变化（决策 30）
+    tray::refresh(&app);
+    outcome
 }
 
 fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
@@ -289,6 +430,22 @@ fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
             })
         }
     }
+}
+
+/// 托盘快速切换（决策 30）：按 ID 从最新清单里取主题并应用
+///
+/// 菜单是重建时拍下的快照，点下去主题可能已被删除或迁移：找不到时返回
+/// `Ok(false)`，托盘会重查菜单把过期条目摘掉，而不是报错吓人。校验完全
+/// 复用 `apply`（槽位白名单、UUID 与目录一致性、光标文件落点），托盘点击
+/// 与界面按钮不会走出两条安全口径。
+pub(crate) fn apply_by_id(theme_id: &str) -> Result<bool, String> {
+    let snapshot = collect_snapshot();
+    let Some(theme) = snapshot.themes.iter().find(|theme| theme.id == theme_id) else {
+        return Ok(false);
+    };
+    let theme = theme.clone();
+    apply(&theme)?;
+    Ok(true)
 }
 
 /// `save_current_theme` 的返回值
@@ -313,13 +470,16 @@ pub struct SaveCurrentOutcome {
 /// 只保存不应用——自动应用会把那些没抄到的非空槽位写成空字符串，反而改变
 /// 用户当前的光标设置。
 #[tauri::command]
-pub async fn save_current_theme() -> Result<SaveCurrentOutcome, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+pub async fn save_current_theme(app: AppHandle) -> Result<SaveCurrentOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("保存当前光标")?;
         save_current()
     })
     .await
-    .map_err(|err| format!("保存当前光标任务异常退出（{err}）"))?
+    .map_err(|err| format!("保存当前光标任务异常退出（{err}）"))?;
+    // 抄全即接管：注册表变了，托盘勾选跟着变（决策 30）
+    tray::refresh(&app);
+    outcome
 }
 
 fn save_current() -> Result<SaveCurrentOutcome, String> {
@@ -385,13 +545,16 @@ fn save_current() -> Result<SaveCurrentOutcome, String> {
 
 /// 恢复系统默认光标
 #[tauri::command]
-pub async fn restore_default() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(restore)
+pub async fn restore_default(app: AppHandle) -> Result<(), String> {
+    let result = tauri::async_runtime::spawn_blocking(restore)
         .await
-        .map_err(|err| format!("恢复默认光标任务异常退出（{err}）"))?
+        .map_err(|err| format!("恢复默认光标任务异常退出（{err}）"))?;
+    // 还原结果决定托盘「还原默认光标」的勾选（决策 30）
+    tray::refresh(&app);
+    result
 }
 
-fn restore() -> Result<(), String> {
+pub(crate) fn restore() -> Result<(), String> {
     registry::clear_cursors()?;
     registry::refresh_cursors()
 }
@@ -401,13 +564,118 @@ fn restore() -> Result<(), String> {
 /// 只接受 UUID。theme_id 来自前端，必须校验格式——否则传入 `../` 之类的值
 /// 会让 `theme_dir` 拼到数据目录之外，误删用户其它文件。
 #[tauri::command]
-pub async fn delete_theme(theme_id: String) -> Result<trash::DeleteOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn delete_theme(app: AppHandle, theme_id: String) -> Result<trash::DeleteOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("删除主题")?;
         delete(&theme_id)
     })
     .await
-    .map_err(|err| format!("删除主题任务异常退出（{err}）"))?
+    .map_err(|err| format!("删除主题任务异常退出（{err}）"))?;
+    // 主题没了，托盘菜单里的对应条目也该跟着消失（决策 30）
+    tray::refresh(&app);
+    outcome
+}
+
+/// 批量删除结果里的一条失败项
+#[derive(Debug, Serialize)]
+pub struct BatchDeleteFailure {
+    pub theme_id: String,
+    pub error: String,
+}
+
+/// `delete_themes` 的返回值
+///
+/// 与批量导出一致是**部分成功**语义：某一套被拒绝（使用中 / 已不存在 /
+/// 非法 ID）只进 `failed`，其余照常移入回收站。`deleted` 是成功移走的
+/// 主题 ID，顺序与入参去重后的顺序一致；`auto_purged` 是回收站超限时
+/// 自动清理的旧条目数。
+#[derive(Debug, Serialize)]
+pub struct BatchDeleteOutcome {
+    pub deleted: Vec<String>,
+    pub failed: Vec<BatchDeleteFailure>,
+    pub auto_purged: usize,
+    pub warning: Option<String>,
+}
+
+/// 批量软删除：多选后一次移入回收站（决策 43）
+///
+/// 逐套复用单套删除的 ID 校验、系统方案拒绝、使用中复核与回收站限额；
+/// 一把 `ops` 锁把整批动作与导入 / 备份 / 迁移隔开，执行完只刷新一次托盘。
+/// 单套失败不拖垮其余——宁可留下几套让用户重试，也不能把前一半悄悄撤掉。
+#[tauri::command]
+pub async fn delete_themes(
+    app: AppHandle,
+    theme_ids: Vec<String>,
+) -> Result<BatchDeleteOutcome, String> {
+    let emitter = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("删除主题")?;
+        let emitter = emitter.clone();
+        delete_many(&theme_ids, &mut |current, total| {
+            let _ = emitter.emit(
+                "delete-progress",
+                progress::TaskProgress::new("delete", current, total, "正在移入回收站"),
+            );
+        })
+    })
+    .await
+    .map_err(|err| format!("批量删除任务异常退出（{err}）"))?;
+
+    if outcome.as_ref().is_ok_and(|outcome| !outcome.deleted.is_empty()) {
+        // 主题没了，托盘菜单里的对应条目也该跟着消失（决策 30）
+        tray::refresh(&app);
+    }
+    outcome
+}
+
+fn delete_many(
+    theme_ids: &[String],
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<BatchDeleteOutcome, String> {
+    // 同一 ID 只处理一次：界面不会重复勾选，但 IPC 入口不信任调用方。
+    // 保留首次出现的位置，成功的顺序与用户看到的选择顺序一致。
+    let mut seen = HashSet::new();
+    let unique: Vec<&str> = theme_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if unique.is_empty() {
+        return Err("没有选择要删除的主题".to_string());
+    }
+
+    let total = unique.len();
+    let mut outcome = BatchDeleteOutcome {
+        deleted: Vec::new(),
+        failed: Vec::new(),
+        auto_purged: 0,
+        warning: None,
+    };
+    let mut warnings = Vec::new();
+
+    for (index, theme_id) in unique.iter().copied().enumerate() {
+        progress(index + 1, total);
+        match delete(theme_id) {
+            Ok(result) => {
+                outcome.deleted.push(theme_id.to_string());
+                outcome.auto_purged = outcome.auto_purged.saturating_add(result.auto_purged);
+                if let Some(warning) = result.warning {
+                    warnings.push(warning);
+                }
+            }
+            Err(error) => outcome.failed.push(BatchDeleteFailure {
+                theme_id: theme_id.to_string(),
+                error,
+            }),
+        }
+    }
+
+    outcome.warning = match warnings.len() {
+        0 => None,
+        1 => warnings.pop(),
+        count => Some(format!("{}（共 {count} 套主题收尾未完全成功）", warnings[0])),
+    };
+    Ok(outcome)
 }
 
 fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
@@ -452,22 +720,41 @@ fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
     trash::move_into_trash(theme_id, &name, slot_count)
 }
 
-/// 重命名已导入的主题
+/// 重命名 / 改描述已导入的主题（决策 62）
 ///
-/// 只改 theme.json 里的显示名，目录名仍是 UUID（改目录会影响正在使用的
+/// 只改 theme.json 里的显示名与描述，目录名仍是 UUID（改目录会影响正在使用的
 /// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
+/// `new_description` 是补丁语义：`None` = 描述不动，`Some` = 整体替换（空串清除）。
 #[tauri::command]
-pub async fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, String> {
-    tauri::async_runtime::spawn_blocking(move || rename(&theme_id, &new_name))
-        .await
-        .map_err(|err| format!("改名任务异常退出（{err}）"))?
+pub async fn rename_theme(
+    app: AppHandle,
+    theme_id: String,
+    new_name: String,
+    new_description: Option<String>,
+) -> Result<CursorTheme, String> {
+    let renamed = tauri::async_runtime::spawn_blocking(move || {
+        rename(&theme_id, &new_name, new_description.as_deref())
+    })
+    .await
+    .map_err(|err| format!("改名任务异常退出（{err}）"))?;
+    // 菜单标签取主题的当前名字，改名后托盘不能还叫旧名（决策 30）
+    tray::refresh(&app);
+    renamed
 }
 
-fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
+fn rename(
+    theme_id: &str,
+    new_name: &str,
+    new_description: Option<&str>,
+) -> Result<CursorTheme, String> {
     if !validation::is_canonical_uuid(theme_id) {
         return Err("非法的主题 ID".to_string());
     }
     let name = validation::validate_theme_name(new_name)?;
+    let description = match new_description {
+        Some(raw) => Some(validation::validate_theme_description(raw)?),
+        None => None,
+    };
 
     let theme_dir = paths::theme_dir(theme_id)?;
     let json_path = theme_dir.join("theme.json");
@@ -484,6 +771,9 @@ fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
     }
 
     theme.name = name;
+    if let Some(description) = description {
+        theme.description = description;
+    }
 
     // 顺手把旧绝对路径改写成相对路径；返回给前端的仍是绝对路径
     theme_paths::write_theme_json(&theme_dir, &theme)
@@ -638,6 +928,436 @@ fn write_export_zip(
     })
 }
 
+// ---------------------------------------------------------------------------
+// 批量导出（决策 34）
+// ---------------------------------------------------------------------------
+
+/// 批量导出结果里的一条成功项
+#[derive(Debug, Serialize)]
+pub struct ExportAllItem {
+    pub theme_id: String,
+    pub name: String,
+    /// 实际落盘的文件名；与目录里已有文件重名时自动加序号
+    pub file_name: String,
+    pub bytes: u64,
+    pub file_count: usize,
+}
+
+/// 批量导出结果里的一条失败项
+#[derive(Debug, Serialize)]
+pub struct ExportAllFailure {
+    pub theme_id: String,
+    pub name: String,
+    pub error: String,
+}
+
+/// `export_all_themes` 的返回值
+///
+/// 部分成功（硬约束 8 的口径）：某一套导不出去（比如文件缺口、源文件被占）
+/// 只记进 `failed`，其余照常落盘；主题清单读不到的降级说明进 `warnings`。
+#[derive(Debug, Serialize)]
+pub struct ExportAllOutcome {
+    pub dir: String,
+    pub exported: Vec<ExportAllItem>,
+    pub failed: Vec<ExportAllFailure>,
+    /// 成功项的 zip 字节数合计
+    pub total_bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+/// 把主题名变成 Windows 文件名安全的 zip 主名
+///
+/// 前端的 `sanitizeFileName` 只管对话框默认名；批量导出的落盘名只有后端知道，
+/// 必须在这里兜底。非法字符替换成空格，保留名加前缀，剔掉结尾的点和空格
+/// （Windows 会静默剥掉它们，重名判断就乱了）。
+fn sanitize_zip_stem(name: &str) -> String {
+    const RESERVED: [&str; 12] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "LPT1", "LPT2",
+    ];
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => ' ',
+            c if (c as u32) < 0x20 => ' ',
+            c => c,
+        })
+        .collect();
+    let mut stem: String = cleaned.trim().chars().take(80).collect();
+    stem = stem.trim().trim_end_matches('.').trim().to_string();
+    if RESERVED.contains(&stem.to_ascii_uppercase().as_str()) {
+        stem = format!("主题-{stem}");
+    }
+    if stem.is_empty() {
+        "未命名主题".to_string()
+    } else {
+        stem
+    }
+}
+
+/// 在导出目录里挑一个不重名的 zip 文件名（`X.zip` → `X (2).zip` → …）
+///
+/// `used` 记录本次批量已占用的名字（小写比较，Windows 文件名不分大小写）；
+/// 目录里先有的同名文件同样避开，不覆盖用户已导出的成果。序号上限 999，
+/// 超过就用 UUID 兜底——正常人的导出目录到不了这个数。
+fn pick_zip_name(dir: &Path, stem: &str, used: &mut HashSet<String>) -> String {
+    let base = format!("{stem}.zip");
+    if !used.contains(&base.to_lowercase()) && !dir.join(&base).exists() {
+        used.insert(base.to_lowercase());
+        return base;
+    }
+    for serial in 2..1000 {
+        let candidate = format!("{stem} ({serial}).zip");
+        if !used.contains(&candidate.to_lowercase()) && !dir.join(&candidate).exists() {
+            used.insert(candidate.to_lowercase());
+            return candidate;
+        }
+    }
+    let fallback = format!("{stem}-{}.zip", Uuid::new_v4());
+    used.insert(fallback.to_lowercase());
+    fallback
+}
+
+/// 目标目录不能是应用自己管理的目录：往 backups\ 里塞 zip 会混进「备份历史」，
+/// 往 trash\ 或主题库里塞包会干扰回收站与主题扫描（硬约束 1 / 决策 26 的边界）
+fn ensure_not_managed_dir(dest: &Path) -> Result<(), String> {
+    let candidates = [
+        ("备份目录", paths::backups_dir()),
+        ("回收站", paths::trash_dir()),
+        ("主题库", paths::themes_dir()),
+    ];
+    for (label, dir) in candidates {
+        let Ok(dir) = dir else { continue };
+        let Ok(resolved) = fs::canonicalize(&dir) else {
+            // 目录还不存在 = 不可能撞上
+            continue;
+        };
+        if dest.starts_with(&resolved) {
+            return Err(format!("不能导出到{label}，会干扰应用自己的数据管理"));
+        }
+    }
+    Ok(())
+}
+
+fn export_all_in(
+    dest_dir: &Path,
+    wanted: Option<&[String]>,
+    progress: &mut dyn FnMut(usize, usize, &str),
+) -> Result<ExportAllOutcome, String> {
+    let (user_themes, warnings) = importer::read_user_themes();
+    let mut themes: Vec<CursorTheme> = user_themes
+        .into_iter()
+        .filter(|theme| !theme.is_built_in)
+        .collect();
+    // 决策 63：传了 ID 清单就只导清单内的主题（「导出所选」）；清单外的 ID
+    // 自然落空，不需要报错——前端传的就是眼前勾选行，界面上看得见几套导几套
+    if let Some(ids) = wanted {
+        let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        themes.retain(|theme| wanted.contains(theme.id.as_str()));
+    }
+    // 按名字排序：批量导出的顺序要稳定，与界面上「我的主题」的浏览顺序呼应
+    themes.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let total = themes.len();
+    let mut used: HashSet<String> = HashSet::new();
+    let mut outcome = ExportAllOutcome {
+        dir: strip_device_prefix(&dest_dir.to_string_lossy()),
+        exported: Vec::new(),
+        failed: Vec::new(),
+        total_bytes: 0,
+        warnings,
+    };
+
+    for (index, theme) in themes.iter().enumerate() {
+        progress(index + 1, total, &theme.name);
+        let stem = sanitize_zip_stem(&theme.name);
+        let file_name = pick_zip_name(dest_dir, &stem, &mut used);
+        let dest = dest_dir.join(&file_name);
+        match export_to(theme, &dest.to_string_lossy()) {
+            Ok(summary) => {
+                let bytes = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+                outcome.total_bytes += bytes;
+                outcome.exported.push(ExportAllItem {
+                    theme_id: theme.id.clone(),
+                    name: theme.name.clone(),
+                    file_name,
+                    bytes,
+                    file_count: summary.file_count,
+                });
+            }
+            Err(err) => outcome.failed.push(ExportAllFailure {
+                theme_id: theme.id.clone(),
+                name: theme.name.clone(),
+                error: err,
+            }),
+        }
+    }
+    Ok(outcome)
+}
+
+/// 批量导出「我的主题」为 zip 主题包（决策 34）
+///
+/// 逐套复用单套导出链路（`export_to`，含 `.inf` 附带与槽位命名），落进用户
+/// 自选目录；某一套失败不拖垮其余。取重操作互斥锁，进度经
+/// `export-all-progress` 事件推给界面（与 `import-progress` 同一套载荷）。
+#[tauri::command]
+pub async fn export_all_themes(
+    app: AppHandle,
+    dest_dir: String,
+    theme_ids: Option<Vec<String>>,
+) -> Result<ExportAllOutcome, String> {
+    let emitter = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("批量导出")?;
+        let trimmed = dest_dir.trim();
+        if trimmed.is_empty() {
+            return Err("导出目录不能为空".to_string());
+        }
+        let dest = fs::canonicalize(trimmed)
+            .map_err(|err| format!("导出目录不存在或无法访问（{err}）"))?;
+        if !dest.is_dir() {
+            return Err("导出目标不是文件夹".to_string());
+        }
+        ensure_not_managed_dir(&dest)?;
+        let emitter = emitter.clone();
+        export_all_in(&dest, theme_ids.as_deref(), &mut |current, total, name| {
+            let _ = emitter.emit(
+                "export-all-progress",
+                progress::TaskProgress::new("export", current, total, name.to_string()),
+            );
+        })
+    })
+    .await
+    .map_err(|err| format!("批量导出任务异常退出（{err}）"))?
+}
+
+/// 内容重复的一组主题（决策 38）
+#[derive(Debug, Serialize)]
+pub struct DuplicateGroup {
+    pub theme_ids: Vec<String>,
+    pub theme_names: Vec<String>,
+    /// 单套主题非空槽位文件的总字节（组内各套一致才成组）
+    pub bytes: u64,
+    /// 非空槽位数
+    pub slots_filled: usize,
+}
+
+/// 主题内容查重结果（决策 38）
+#[derive(Debug, Serialize)]
+pub struct DuplicateReport {
+    /// 内容完全一致的组（≥2 套），按可省字节降序
+    pub groups: Vec<DuplicateGroup>,
+    /// 参与比对的主题数（缺文件 / 无可用槽位的不参与）
+    pub scanned: usize,
+    /// 因槽位文件缺失而未参与比对的主题数（在证据里说明）
+    pub skipped_missing: usize,
+    /// 每组删到剩一套合计能省的字节
+    pub wasted_bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+/// 主题内容查重（决策 38）：找出槽位文件内容完全一致的「我的主题」组
+///
+/// 与决策 35 的存储统计配对：统计告诉你占了多少，查重告诉你哪些是重复的。
+/// 两步走——先按「槽位键 + 扩展名 + 字节数」指纹预分组（绝大多数不同包在
+/// 这一步就分开），指纹相同的组内再逐字节比对确认，只报**证实**的重复，
+/// 不猜。只读命令，不取 `ops` 锁、不发事件。
+#[tauri::command]
+pub async fn find_duplicate_themes() -> Result<DuplicateReport, String> {
+    tauri::async_runtime::spawn_blocking(find_duplicate_themes_in)
+        .await
+        .map_err(|err| format!("查重任务异常退出（{err}）"))?
+}
+
+/// 槽位指纹：排序后相同的才进同一预分组
+type SlotFingerprint = Vec<(String, String, u64)>;
+
+/// 单套主题的查重素材：非空槽位文件表 + 指纹（决策 38 诊断与决策 47 导入查重共用）
+struct ThemeEvidence {
+    id: String,
+    name: String,
+    /// 槽位文件字节合计
+    bytes: u64,
+    slots_filled: usize,
+    /// 注册表键 → 槽位文件绝对路径
+    files: std::collections::BTreeMap<String, std::path::PathBuf>,
+    fingerprint: SlotFingerprint,
+}
+
+impl ThemeEvidence {
+    /// 缺文件（或没有非空槽位）的主题给不出可证实的指纹，返回 None——
+    /// 查重只报证实过的重复，缺文件的不参与也不猜
+    fn of(theme: &CursorTheme) -> Option<ThemeEvidence> {
+        let mut files = std::collections::BTreeMap::new();
+        let mut fingerprint: SlotFingerprint = Vec::new();
+        let mut bytes = 0u64;
+        for slot in &theme.cursors {
+            if slot.file_path.trim().is_empty() {
+                continue;
+            }
+            let path = std::path::PathBuf::from(&slot.file_path);
+            let meta = match fs::metadata(&path) {
+                Ok(meta) if meta.is_file() => meta,
+                _ => return None,
+            };
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            bytes += meta.len();
+            fingerprint.push((slot.registry_key.clone(), ext, meta.len()));
+            files.insert(slot.registry_key.clone(), path);
+        }
+        if files.is_empty() {
+            return None;
+        }
+        fingerprint.sort();
+        Some(ThemeEvidence {
+            id: theme.id.clone(),
+            name: theme.name.clone(),
+            bytes,
+            slots_filled: files.len(),
+            files,
+            fingerprint,
+        })
+    }
+
+    /// 逐字节确认：自己每个槽位文件与对方同键文件内容一致才算相同
+    /// （指纹相等只说明键、扩展名与字节数一致，内容要字节说算）
+    fn identical_to(&self, other: &ThemeEvidence) -> bool {
+        self.files.iter().all(|(key, path)| {
+            other
+                .files
+                .get(key)
+                .is_some_and(|other_path| files_equal(path, other_path))
+        })
+    }
+}
+
+/// 导入查重（决策 47）：找与刚导入主题内容完全相同的已有主题，返回其名称
+///
+/// 复用决策 38 的两步口径：指纹相同才进入逐字节确认。只读不取锁——
+/// 调用方 `import_theme` 已在 `ops` 锁内；查重给不出结论时宁可漏报不误报。
+fn find_identical_theme_name(new_theme: &CursorTheme) -> Option<String> {
+    let fresh = ThemeEvidence::of(new_theme)?;
+    for theme in importer::read_user_themes().0 {
+        // 刚导入的这套此刻已经在磁盘上，别跟自己比
+        if theme.id == new_theme.id {
+            continue;
+        }
+        let Some(existing) = ThemeEvidence::of(&theme) else {
+            continue;
+        };
+        if existing.fingerprint == fresh.fingerprint && existing.identical_to(&fresh) {
+            return Some(existing.name);
+        }
+    }
+    None
+}
+
+fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
+    let (themes, mut warnings) = importer::read_user_themes();
+
+    let mut candidates: Vec<ThemeEvidence> = Vec::new();
+    let mut skipped_missing = 0usize;
+    for theme in &themes {
+        match ThemeEvidence::of(theme) {
+            Some(evidence) => candidates.push(evidence),
+            // 缺文件的主题没法证实内容，不参与比对（完整性体检另有提示）
+            None => skipped_missing += 1,
+        }
+    }
+
+    // 指纹相同的进同一预分组；组内两两与首套逐字节比对，全部一致才算重复
+    let mut pregroups: std::collections::HashMap<SlotFingerprint, Vec<ThemeEvidence>> =
+        std::collections::HashMap::new();
+    for candidate in candidates {
+        pregroups
+            .entry(candidate.fingerprint.clone())
+            .or_default()
+            .push(candidate);
+    }
+
+    let mut groups = Vec::new();
+    let mut wasted_bytes = 0u64;
+    let scanned = pregroups.values().map(Vec::len).sum::<usize>();
+    for members in pregroups.into_values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let base = &members[0];
+        let mut confirmed: Vec<&ThemeEvidence> = vec![base];
+        for member in &members[1..] {
+            if member.identical_to(base) {
+                confirmed.push(member);
+            }
+        }
+        if confirmed.len() < 2 {
+            continue;
+        }
+        let mut names: Vec<String> = confirmed.iter().map(|c| c.name.clone()).collect();
+        let mut ids: Vec<String> = confirmed.iter().map(|c| c.id.clone()).collect();
+        // 与「最近使用」一致：最早导入的排前面，删重复时默认留最老的一套
+        let mut order: Vec<usize> = (0..ids.len()).collect();
+        order.sort_by(|a, b| ids[*a].cmp(&ids[*b]));
+        ids = order.iter().map(|i| ids[*i].clone()).collect();
+        names = order.iter().map(|i| names[*i].clone()).collect();
+        let group_wasted = base.bytes * (confirmed.len() as u64 - 1);
+        wasted_bytes += group_wasted;
+        groups.push((group_wasted, DuplicateGroup {
+            theme_ids: ids,
+            theme_names: names,
+            bytes: base.bytes,
+            slots_filled: base.slots_filled,
+        }));
+    }
+    groups.sort_by_key(|(wasted, _)| std::cmp::Reverse(*wasted));
+    let groups: Vec<DuplicateGroup> = groups.into_iter().map(|(_, group)| group).collect();
+
+    Ok(DuplicateReport {
+        groups,
+        scanned,
+        skipped_missing,
+        wasted_bytes,
+        warnings: std::mem::take(&mut warnings),
+    })
+}
+
+/// 两个文件逐块（64KB）比对内容；读不出的一律按「不一致」处理——
+/// 查重只报证实过的重复，错杀比漏报更招人烦
+fn files_equal(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut left), Ok(mut right)) = (fs::File::open(a), fs::File::open(b)) else {
+        return false;
+    };
+    let mut buf_left = [0u8; 64 * 1024];
+    let mut buf_right = [0u8; 64 * 1024];
+    loop {
+        let na = match left.read(&mut buf_left) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match right.read(&mut buf_right) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+        if buf_left[..na] != buf_right[..nb] {
+            return false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +1442,45 @@ mod tests {
         }
     }
 
+    /// 比对失败时把两侧路径的原始值与归一值一起打出来
+    ///
+    /// 注册表存的是 `fs::canonicalize` 之后的路径，主题侧是拼接出来的普通路径，
+    /// `normalize_path` 只兜平前缀和大小写。两者若差在别的维度（重解析点展开、
+    /// 8.3 短名）只会表现为「本机绿、CI 红」，光看布尔结果定位不了，必须看到
+    /// 两台机器上各自的真实字符串。
+    fn path_diff_report(theme: &CursorTheme, current: &[(String, String)]) -> String {
+        let mut out = String::new();
+        let theme_slots: Vec<&CursorSlot> = theme
+            .cursors
+            .iter()
+            .filter(|slot| !slot.file_path.trim().is_empty())
+            .collect();
+        out.push_str(&format!(
+            "  主题「{}」非空槽位 {} 个（声明 {} 个）：\n",
+            theme.name,
+            theme_slots.len(),
+            theme.cursors.len()
+        ));
+        for slot in &theme_slots {
+            out.push_str(&format!(
+                "    {:<10} 原始={:?}\n             归一={:?}\n",
+                slot.registry_key,
+                slot.file_path,
+                normalize_path(&slot.file_path)
+            ));
+        }
+        out.push_str(&format!("  注册表非空槽位 {} 个：\n", current.len()));
+        for (key, path) in current {
+            out.push_str(&format!(
+                "    {:<10} 原始={:?}\n             归一={:?}\n",
+                key,
+                path,
+                normalize_path(path)
+            ));
+        }
+        out
+    }
+
     /// 回归测试：注册表读失败时，用户主题不该跟着消失
     ///
     /// 修之前的行为是 `read_system_schemes()?` 一错全错，用户主题读都没读。
@@ -745,6 +1504,66 @@ mod tests {
         );
         assert_eq!(themes.len(), 2);
         assert_eq!(warnings.len(), 1, "用户来源的警告不能被吞掉");
+    }
+
+    /// 回归测试：同一文件的 8.3 短名写法与 canonical 写法必须归一到同一个值
+    ///
+    /// CI runner 的临时目录是 `C:\Users\RUNNER~1\AppData\Local\Temp\...`，注册表里
+    /// 存的却是 canonicalize 之后的 `...\runneradmin\...`。本机用户名不超过 8 个字符
+    /// 时两种写法重合，所以这条只有 CI 能真正跑出差异——它钉的是"当场的临时目录"，
+    /// 不再依赖某台机器碰巧看不出来。
+    #[test]
+    fn 短名写法与规范写法归一后必须相同() {
+        let root = TempDir::new("norm-83");
+        let _guard = root.isolate_paths();
+
+        let file = root.join("arrow.cur");
+        fs::write(&file, fixture_cur()).expect("写 fixture");
+        let canonical = fs::canonicalize(&file).expect("canonicalize fixture");
+
+        assert_eq!(
+            normalize_path(&file.to_string_lossy()),
+            normalize_path(&canonical.to_string_lossy()),
+            "同一套光标不能因写法不同被判成两套"
+        );
+    }
+
+    /// 回归测试：经重解析点到达的路径与真实路径必须归一到同一个值
+    ///
+    /// 与上一条是同一个坑的两面。本机用户名不够长所以短名那条是空转的，重解析点
+    /// 这条在两台机器上都能真的跑出差异。建不出 junction（权限或文件系统限制）
+    /// 就跳过，不给 CI 添环境性假红。
+    #[test]
+    fn 重解析点写法与真实写法归一后必须相同() {
+        use std::process::Command;
+        let root = TempDir::new("junction");
+        let real = root.path().join("real");
+        fs::create_dir_all(&real).expect("建 real");
+        let file = real.join("arrow.cur");
+        fs::write(&file, fixture_cur()).expect("写 fixture");
+
+        let link = root.path().join("link");
+        let link_arg = link.to_string_lossy().into_owned();
+        let real_arg = real.to_string_lossy().into_owned();
+        let created = Command::new("cmd")
+            .args(["/C", "mklink", "/J", link_arg.as_str(), real_arg.as_str()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !created {
+            eprintln!("跳过：本机建不出 junction，这条断言跑不了");
+            return;
+        }
+
+        let via_link = link.join("arrow.cur");
+        let canonical = fs::canonicalize(&file).expect("canonicalize fixture");
+        let normalized_link = normalize_path(&via_link.to_string_lossy());
+        let normalized_real = normalize_path(&canonical.to_string_lossy());
+        fs::remove_dir(&link).expect("删 junction");
+        assert_eq!(
+            normalized_link, normalized_real,
+            "junction 写法与真实写法不能被判成两套光标"
+        );
     }
 
     fn theme_with_slots(id: &str, name: &str, slots: &[(&str, &str)]) -> CursorTheme {
@@ -820,6 +1639,25 @@ mod tests {
             ("Wait", r"C:\A\wait.cur"),
         ]);
         assert!(detect_active_theme(&[theme], &superset, "").is_none());
+    }
+
+    /// 数量相等但注册表里有槽位没被认领，仍然不算同一套
+    ///
+    /// 手改过的 theme.json 会出现重复的 registry_key：两个 Arrow 同时认领注册表的
+    /// Arrow，把 Wait 留空。只查「每个主题槽位都能对上」会漏掉这一类。
+    #[test]
+    fn 重复槽位键不能顶替未认领的注册表槽位() {
+        let theme = theme_with_slots(
+            "dup",
+            "Dup",
+            &[("Arrow", r"C:\A\arrow.cur"), ("Arrow", r"C:\A\arrow.cur")],
+        );
+        let slots = current(&[("Arrow", r"C:\A\arrow.cur"), ("Wait", r"C:\A\wait.cur")]);
+
+        assert!(
+            detect_active_theme(&[theme], &slots, "").is_none(),
+            "Wait 没被任何主题槽位认领，不能判成正在使用"
+        );
     }
 
     #[test]
@@ -904,7 +1742,7 @@ mod tests {
             let err = delete(bad).unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 应被拒绝，实际：{err}");
 
-            let err = rename(bad, "x").unwrap_err();
+            let err = rename(bad, "x", None).unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 改名也应被拒绝，实际：{err}");
         }
     }
@@ -914,13 +1752,20 @@ mod tests {
     fn 改名的名称校验() {
         let id = Uuid::new_v4().to_string();
 
-        let err = rename(&id, "   ").unwrap_err();
+        let err = rename(&id, "   ", None).unwrap_err();
         assert!(err.contains("不能为空"), "实际：{err}");
 
-        let err = rename(&id, &"字".repeat(41)).unwrap_err();
+        let err = rename(&id, &"字".repeat(41), None).unwrap_err();
         assert!(err.contains("40"), "实际：{err}");
 
-        let err = rename(&id, "a\nb").unwrap_err();
+        let err = rename(&id, "a\nb", None).unwrap_err();
+        assert!(err.contains("控制字符"), "实际：{err}");
+
+        // 描述校验（决策 62）：空串合法（= 清除）、超长与控制字符拒绝
+        let err = rename(&id, "名字", Some(&"字".repeat(201))).unwrap_err();
+        assert!(err.contains("200"), "实际：{err}");
+
+        let err = rename(&id, "名字", Some("a\nb")).unwrap_err();
         assert!(err.contains("控制字符"), "实际：{err}");
     }
 
@@ -939,7 +1784,7 @@ mod tests {
         )
         .expect("写入初始 theme.json");
 
-        let outcome = rename(&id, "  新名字  ");
+        let outcome = rename(&id, "  新名字  ", None);
 
         let saved: CursorTheme = serde_json::from_str(
             &fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json"),
@@ -950,6 +1795,46 @@ mod tests {
         assert_eq!(renamed.name, "新名字", "首尾空格应被去掉");
         assert_eq!(saved.name, "新名字", "改名结果必须落盘");
         assert_eq!(saved.updated_at, "", "改名不应改动导入时间");
+    }
+
+    /// 决策 62：描述编辑走同一命令，补丁语义（None 不动 / Some 替换 / 空串清除）
+    #[test]
+    fn 改描述应落盘且不改名与导入时间() {
+        let root = TempDir::new("rename-description");
+        let _guard = root.isolate_paths();
+
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
+        paths::ensure_dir(&dir).expect("建临时主题目录");
+        let mut theme = fake_theme(&id);
+        theme.description = "旧描述".to_string();
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .expect("写入初始 theme.json");
+
+        // Some = 整体替换，trim；名字与导入时间不动
+        let renamed = rename(&id, &theme.name, Some("  新描述  "))
+            .expect("改描述应成功");
+        assert_eq!(renamed.description, "新描述", "描述应被替换并去首尾空格");
+        assert_eq!(renamed.name, theme.name, "只改描述时名称不应变");
+        assert_eq!(renamed.updated_at, "", "改描述不应改动导入时间");
+
+        // None = 补丁语义，描述保持原值
+        let untouched = rename(&id, &theme.name, None).expect("不改描述应成功");
+        assert_eq!(untouched.description, "新描述", "None 不应动描述");
+
+        // 空串 = 清除描述
+        let cleared = rename(&id, &theme.name, Some("")).expect("清除描述应成功");
+        assert_eq!(cleared.description, "", "空串应清除描述");
+
+        // 落盘核验：磁盘上的 theme.json 与返回值一致
+        let saved: CursorTheme = serde_json::from_str(
+            &fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json"),
+        )
+        .expect("解析 theme.json");
+        assert_eq!(saved.description, "", "清除结果必须落盘");
     }
 
     /// 导出必须形成闭环：文件名按槽位重命名，再导入能还原成同一个槽位
@@ -991,8 +1876,10 @@ mod tests {
         // .inf 字节层面：UTF-16LE BOM；内容层面：方案串与槽位路径齐全
         assert_eq!(&inf_bytes[..2], &[0xFF, 0xFE], "必须是 UTF-16LE BOM 开头");
         let units: Vec<u16> = inf_bytes[2..]
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u16::from_le_bytes(*p))
             .collect();
         let inf_text = String::from_utf16(&units).expect(".inf 必须是合法 UTF-16");
         assert!(inf_text.contains("signature=\"$CHICAGO$\""));
@@ -1035,6 +1922,137 @@ mod tests {
         let err = export_to(&theme, &zip_path.to_string_lossy()).unwrap_err();
         assert!(err.contains("没有可导出"), "实际：{err}");
         assert!(!zip_path.exists(), "失败时不能留下空压缩包");
+    }
+
+    /// 批量导出：按名落盘、重名加序号、顺序稳定
+    #[test]
+    fn 批量导出按主题名落盘并避开重名() {
+        let root = TempDir::new("export-all");
+        let _guard = root.isolate_paths();
+        let dest = root.join("导出目录");
+        fs::create_dir_all(&dest).expect("建导出目录");
+
+        let (_a, _) = seed_exportable_theme("夜色", &[("Arrow", "a.cur", fixture_cur())]);
+        let (_b, _) = seed_exportable_theme("夜色", &[("Arrow", "b.cur", fixture_cur())]);
+        let (_c, _) = seed_exportable_theme("晨光", &[("Arrow", "c.cur", fixture_cur())]);
+
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        assert_eq!(outcome.exported.len(), 3, "三套全成功：{:?}", outcome.failed);
+        assert!(outcome.failed.is_empty());
+        assert!(outcome.warnings.is_empty());
+
+        let mut names: Vec<&str> = outcome
+            .exported
+            .iter()
+            .map(|item| item.file_name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["夜色 (2).zip", "夜色.zip", "晨光.zip"],
+            "重名自动加序号（两套「夜色」各占一个名字）"
+        );
+        assert!(outcome.total_bytes > 0);
+        for item in &outcome.exported {
+            assert!(dest.join(&item.file_name).is_file(), "{} 应落盘", item.file_name);
+            assert!(item.bytes > 0, "{} 要报出体积", item.file_name);
+            assert_eq!(item.file_count, 1);
+        }
+    }
+
+    /// 决策 63：「导出所选」传 ID 清单时只导清单内的主题；未知 ID 落空不报错
+    #[test]
+    fn 批量导出传入_id_清单时只导选中的() {
+        let root = TempDir::new("export-all-selected");
+        let _guard = root.isolate_paths();
+        let dest = root.join("导出目录");
+        fs::create_dir_all(&dest).expect("建导出目录");
+
+        let (a, _) = seed_exportable_theme("夜色", &[("Arrow", "a.cur", fixture_cur())]);
+        let (_b, _) = seed_exportable_theme("晨光", &[("Arrow", "b.cur", fixture_cur())]);
+        let (c, _) = seed_exportable_theme("暮色", &[("Arrow", "c.cur", fixture_cur())]);
+
+        let outcome = export_all_in(&dest, Some(&[a.id.clone(), c.id.clone()]), &mut |_, _, _| {})
+            .expect("导出所选整体不失败");
+        let mut names: Vec<&str> = outcome
+            .exported
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["夜色", "暮色"], "只导清单内的两套：{:?}", outcome.exported);
+        assert!(outcome.failed.is_empty());
+        assert!(!dest.join("晨光.zip").is_file(), "清单外的主题不应落盘");
+
+        // 清单里全是不存在的 ID：导出 0 套而不报错（不存在的主题无需点名）
+        let empty = export_all_in(&dest, Some(&[Uuid::new_v4().to_string()]), &mut |_, _, _| {})
+            .expect("未知 ID 不该报错");
+        assert!(empty.exported.is_empty() && empty.failed.is_empty());
+
+        // None 保持原语义：全部导出
+        let all = export_all_in(&dest, None, &mut |_, _, _| {}).expect("全量导出不失败");
+        assert_eq!(all.exported.len(), 3, "三套全成功：{:?}", all.failed);
+    }
+
+    /// 部分成功：文件缺口的那套进 failed，好主题照常落盘；管理目录拒绝导出
+    #[test]
+    fn 批量导出部分成功并拒绝落进管理目录() {
+        let root = TempDir::new("export-all-partial");
+        let _guard = root.isolate_paths();
+
+        let (good, _) = seed_exportable_theme("好主题", &[("Arrow", "a.cur", fixture_cur())]);
+        let broken_id = Uuid::new_v4().to_string();
+        let broken_dir = paths::theme_dir(&broken_id).expect("解析主题目录");
+        fs::create_dir_all(&broken_dir).expect("建目录");
+        let broken = theme_with_slots(
+            &broken_id,
+            "缺文件",
+            &[(
+                "Arrow",
+                broken_dir.join("cursors").join("missing.cur").to_str().unwrap(),
+            )],
+        );
+        fs::write(
+            broken_dir.join("theme.json"),
+            serde_json::to_string_pretty(&broken).expect("序列化主题"),
+        )
+        .expect("写 theme.json");
+
+        let dest = root.join("out");
+        fs::create_dir_all(&dest).expect("建导出目录");
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        assert_eq!(outcome.exported.len(), 1, "好主题照常落盘");
+        assert_eq!(outcome.exported[0].theme_id, good.id);
+        assert_eq!(outcome.failed.len(), 1, "文件缺口的那套进 failed");
+        assert_eq!(outcome.failed[0].name, "缺文件");
+        assert!(
+            outcome.failed[0].error.contains("没有可导出"),
+            "失败原因要可读：{}",
+            outcome.failed[0].error
+        );
+
+        // 备份 / 回收站 / 主题库不能当导出目标：会干扰应用自己的数据管理
+        for dir in [
+            paths::backups_dir().expect("备份目录"),
+            paths::trash_dir().expect("回收站"),
+            paths::themes_dir().expect("主题库"),
+        ] {
+            fs::create_dir_all(&dir).expect("建管理目录");
+            let resolved = fs::canonicalize(&dir).expect("规范化");
+            let err = ensure_not_managed_dir(&resolved)
+                .expect_err(&dir.to_string_lossy());
+            assert!(err.contains("不能导出到"), "{err}");
+        }
+    }
+
+    /// 批量导出的落盘名只有后端知道：非法字符与保留名必须在这里兜底
+    #[test]
+    fn 批量导出的文件名兜底安全字符() {
+        assert_eq!(sanitize_zip_stem("夜色<magic>"), "夜色 magic");
+        assert_eq!(sanitize_zip_stem("  ..结尾点..  "), "..结尾点");
+        assert_eq!(sanitize_zip_stem("CON"), "主题-CON");
+        assert_eq!(sanitize_zip_stem("///"), "未命名主题");
+        assert_eq!(sanitize_zip_stem(""), "未命名主题");
     }
 
     /// 把一份真实导出的 .inf 抽到系统临时目录，方便用记事本打开人工检查
@@ -1171,6 +2189,118 @@ mod tests {
         assert!(dir.exists(), "拒绝删除时目录必须保留");
     }
 
+    /// 批量删除按入参顺序逐套移入回收站，同一 ID 只处理一次
+    #[test]
+    fn 批量删除逐套移入回收站并去重() {
+        let root = TempDir::new("delete-many");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many", true);
+
+        let (first, first_dir) =
+            seed_exportable_theme("批量甲", &[("Arrow", "arrow.cur", fixture_cur())]);
+        let (second, second_dir) =
+            seed_exportable_theme("批量乙", &[("Wait", "busy.ani", fixture_ani())]);
+        let mut steps = Vec::new();
+
+        let outcome = delete_many(
+            &[first.id.clone(), second.id.clone(), first.id.clone()],
+            &mut |current, total| steps.push((current, total)),
+        )
+        .expect("批量删除应整体成功");
+
+        assert_eq!(outcome.deleted, vec![first.id.clone(), second.id.clone()]);
+        assert!(outcome.failed.is_empty(), "不应有失败项");
+        assert_eq!(outcome.auto_purged, 0);
+        assert_eq!(steps, vec![(1, 2), (2, 2)], "进度要按去重后的总数上报");
+        assert!(!first_dir.exists() && !second_dir.exists(), "主题目录应已移走");
+        let entries = crate::utils::trash::list().expect("列出回收站").entries;
+        assert_eq!(entries.len(), 2, "两套主题都要留下回收站条目");
+    }
+
+    /// 批量里有一套正在使用：只拒绝那一套，其余继续删除（部分成功）
+    #[test]
+    fn 批量删除拒绝使用中主题但不影响其余() {
+        let root = TempDir::new("delete-many-active");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many-active", true);
+
+        let (active, active_dir) =
+            seed_exportable_theme("批量使用中", &[("Arrow", "arrow.cur", fixture_cur())]);
+        let (other, other_dir) =
+            seed_exportable_theme("批量可删", &[("Wait", "busy.ani", fixture_ani())]);
+        registry::write_cursors(&active.cursors, &active.name).expect("写隔离注册表");
+
+        let outcome = delete_many(
+            &[active.id.clone(), other.id.clone()],
+            &mut |_, _| {},
+        )
+        .expect("部分失败仍应返回结果");
+
+        assert_eq!(outcome.deleted, vec![other.id.clone()]);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].theme_id, active.id);
+        assert!(
+            outcome.failed[0].error.contains("正在使用"),
+            "失败原因要说清是使用中：{}",
+            outcome.failed[0].error
+        );
+        assert!(active_dir.exists(), "被拒绝的主题目录必须保留");
+        assert!(!other_dir.exists(), "其余主题应照常删除");
+        assert_eq!(
+            crate::utils::trash::list().expect("列出回收站").entries.len(),
+            1,
+            "只有成功删除的那套进入回收站"
+        );
+    }
+
+    /// 非法 ID 只记这一条失败，不能拖垮整批
+    #[test]
+    fn 批量删除非法_id_逐条失败不影响其余() {
+        let root = TempDir::new("delete-many-bad-id");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many-bad-id", true);
+
+        let (theme, dir) =
+            seed_exportable_theme("批量合法", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let outcome = delete_many(
+            &["../evil".to_string(), theme.id.clone()],
+            &mut |_, _| {},
+        )
+        .expect("非法 ID 不应让整批失败");
+
+        assert_eq!(outcome.deleted, vec![theme.id]);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].theme_id, "../evil");
+        assert!(
+            outcome.failed[0].error.contains("非法"),
+            "实际：{}",
+            outcome.failed[0].error
+        );
+        assert!(!dir.exists(), "合法主题仍应删除");
+    }
+
+    /// 全部失败仍返回逐条原因，让界面能说明「为什么一套都没删掉」
+    #[test]
+    fn 批量删除全部失败仍返回逐条原因() {
+        let outcome = delete_many(
+            &["bad-id".to_string(), "../evil".to_string()],
+            &mut |_, _| {},
+        )
+        .expect("逐条失败不是命令级失败");
+
+        assert!(outcome.deleted.is_empty());
+        assert_eq!(outcome.failed.len(), 2);
+        assert!(outcome.failed.iter().all(|item| item.error.contains("非法")));
+    }
+
+    /// 空选择直接拒绝，不能拿空列表去碰回收站
+    #[test]
+    fn 批量删除空列表应拒绝() {
+        let err = delete_many(&[], &mut |_, _| {}).unwrap_err();
+        assert!(err.contains("没有选择"), "实际：{err}");
+    }
+
     /// 外部光标（系统设置 / 其它工具）保存为我的主题后应立即接管
     #[test]
     fn 保存当前光标会把外部方案收编并自动应用() {
@@ -1216,7 +2346,8 @@ mod tests {
         assert_eq!(current.len(), 2);
         assert!(
             theme_matches_current(&outcome.theme, &current),
-            "接管后注册表应与新主题一致"
+            "接管后注册表应与新主题一致\n{}",
+            path_diff_report(&outcome.theme, &current)
         );
         assert_eq!(
             outcome.recent.first().map(|entry| entry.theme_id.as_str()),
@@ -1336,5 +2467,252 @@ mod tests {
         let err = export_to(&mine, &zip.to_string_lossy()).unwrap_err();
         assert!(err.contains("该主题目录"), "导出也必须拒绝，实际：{err}");
         assert!(!zip.exists(), "失败时不能留下压缩包");
+    }
+
+    /// 托盘快速切换（决策 30）：按 ID 应用必须与界面按钮走同一条链路
+    #[test]
+    fn 托盘按_id_应用主题并记录最近使用() {
+        let root = TempDir::new("tray-apply");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-apply", true);
+
+        let (theme, _dir) = seed_exportable_theme("托盘切换", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let applied = apply_by_id(&theme.id).expect("应应用成功");
+        assert!(applied);
+
+        let current = registry::read_current_slots().expect("读回注册表");
+        assert!(
+            theme_matches_current(&theme, &current),
+            "注册表应切到该主题\n{}",
+            path_diff_report(&theme, &current)
+        );
+        let history_path = paths::history_file().expect("解析历史文件");
+        let events = history::read_events_from(&history_path).events;
+        assert_eq!(
+            events.first().map(|entry| entry.theme_id.as_str()),
+            Some(theme.id.as_str()),
+            "托盘应用与界面应用一样要记入最近使用"
+        );
+    }
+
+    /// 菜单是重建时的快照：主题被删后再点，不能报错也不能动注册表
+    #[test]
+    fn 托盘按_id_应用已删除的主题时静默跳过() {
+        let root = TempDir::new("tray-apply-gone");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-gone", false);
+
+        let applied = apply_by_id(&Uuid::new_v4().to_string()).expect("找不到不算错误");
+        assert!(!applied);
+        assert!(
+            registry::read_current_slots().is_err(),
+            "隔离键没有槽位：未应用时注册表不应被写入"
+        );
+    }
+
+    /// 托盘点击不能绕过主题目录校验：与应用命令共用同一套安全口径
+    ///
+    /// 光标文件被挪走后 theme.json 仍指向它：清单里还能出现这个主题
+    /// （读取端只清坏槽位），但 `apply` 的存在性校验必须把它拦下。
+    #[test]
+    fn 托盘按_id_应用时仍走主题目录校验() {
+        let root = TempDir::new("tray-apply-cross");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-cross", true);
+
+        let (theme, dir) = seed_exportable_theme("文件被挪走", &[("Arrow", "arrow.cur", fixture_cur())]);
+        fs::remove_file(dir.join("cursors").join("arrow.cur")).expect("删掉光标文件");
+
+        let err = apply_by_id(&theme.id).unwrap_err();
+        assert!(err.contains("不存在") || err.contains("读不到"), "实际：{err}");
+    }
+
+    /// 托盘「还原默认」与还原命令同链路：清槽位后注册表应回到空
+    #[test]
+    fn 托盘还原默认清空注册表槽位() {
+        let root = TempDir::new("tray-restore");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-restore", true);
+
+        let (theme, _dir) = seed_exportable_theme("应用后还原", &[("Arrow", "arrow.cur", fixture_cur())]);
+        registry::write_cursors(&theme.cursors, &theme.name).expect("先占上槽位");
+        assert!(!registry::read_current_slots().expect("读回注册表").is_empty());
+
+        restore().expect("还原默认");
+        assert!(
+            registry::read_current_slots().expect("读回注册表").is_empty(),
+            "还原后不应残留槽位"
+        );
+    }
+
+    #[test]
+    fn 查重把内容一致的主题分成一组() {
+        let temp = TempDir::new("dedupe-same");
+        let _guard = temp.isolate_paths();
+        let arrow = fixture_cur();
+        let (a, _) = seed_exportable_theme(
+            "甲",
+            &[("Arrow", "arrow.cur", arrow.clone()), ("Wait", "wait.cur", fixture_cur())],
+        );
+        let (b, _) = seed_exportable_theme(
+            "乙",
+            &[("Arrow", "arrow.cur", arrow), ("Wait", "wait.cur", fixture_cur())],
+        );
+        let (_c, _) = seed_exportable_theme("丙", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.scanned, 3, "{report:?}");
+        assert_eq!(report.groups.len(), 1, "{report:?}");
+        let group = &report.groups[0];
+        assert_eq!(group.theme_ids.len(), 2, "{group:?}");
+        assert!(
+            group.theme_ids.contains(&a.id) && group.theme_ids.contains(&b.id),
+            "重复组只含甲乙：{group:?}"
+        );
+        assert_eq!(group.slots_filled, 2);
+        assert!(report.wasted_bytes > 0, "可省字节要算出来");
+        assert_eq!(report.skipped_missing, 0);
+    }
+
+    #[test]
+    fn 同尺寸不同内容不算重复() {
+        let temp = TempDir::new("dedupe-diff");
+        let _guard = temp.isolate_paths();
+        let (_a, _) = seed_exportable_theme("甲", &[("Arrow", "arrow.cur", b"AAAA".to_vec())]);
+        let (_b, _) = seed_exportable_theme("乙", &[("Arrow", "arrow.cur", b"AAAB".to_vec())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert!(report.groups.is_empty(), "指纹相同也要靠字节比对拦住：{report:?}");
+        assert_eq!(report.scanned, 2);
+    }
+
+    #[test]
+    fn 缺文件的主题不参与比对() {
+        let temp = TempDir::new("dedupe-missing");
+        let _guard = temp.isolate_paths();
+        let arrow = fixture_cur();
+        let (_a, _) = seed_exportable_theme("甲", &[("Arrow", "arrow.cur", arrow.clone())]);
+        let (_b, bdir) = seed_exportable_theme("乙", &[("Arrow", "arrow.cur", arrow)]);
+        fs::remove_file(bdir.join("cursors").join("arrow.cur")).expect("删槽位文件");
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.scanned, 1, "缺文件的「乙」不该参与：{report:?}");
+        assert_eq!(report.skipped_missing, 1);
+        assert!(report.groups.is_empty(), "内容不完整不能断言重复：{report:?}");
+    }
+
+    #[test]
+    fn 三套完全一致只报一组且按可省字节排序() {
+        let temp = TempDir::new("dedupe-triple");
+        let _guard = temp.isolate_paths();
+        let big = {
+            let mut bytes = fixture_cur();
+            bytes.extend_from_slice(&vec![0xABu8; 4096]);
+            bytes
+        };
+        for name in ["甲", "乙", "丙"] {
+            let (_theme, _) = seed_exportable_theme(name, &[("Arrow", "arrow.cur", big.clone())]);
+        }
+        let (_solo, _) = seed_exportable_theme("丁", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.groups.len(), 1);
+        assert_eq!(report.groups[0].theme_ids.len(), 3);
+        // 一套 big 的字节 × 2（三套删到剩一套）
+        assert_eq!(
+            report.wasted_bytes,
+            (4096 + 22 + (32 * 32 * 4 + (32 / 8) * 32 + 40)) as u64 * 2,
+            "可省字节按「套数 - 1」累计：{report:?}"
+        );
+    }
+
+    /// 与 importer 测试同款的最小 zip 构造（导入查重用例需要真实导入链路）
+    fn zip_with(path: &Path, entries: Vec<(String, Vec<u8>)>) {
+        use std::io::Write as _;
+        let file = fs::File::create(path).expect("建 zip");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            writer.start_file(name, options).expect("写入条目");
+            writer.write_all(&data).expect("写入数据");
+        }
+        writer.finish().expect("完成压缩");
+    }
+
+    #[test]
+    fn 导入查重_刚导入的不会跟自己成对() {
+        let temp = TempDir::new("import-dup-self");
+        let _guard = temp.isolate_paths();
+        let zip = temp.join("pack-a.zip");
+        zip_with(
+            &zip,
+            vec![
+                ("cursors/arrow.cur".to_string(), fixture_cur()),
+                ("cursors/busy.ani".to_string(), fixture_ani()),
+            ],
+        );
+        let report = importer::import_source_report(zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        assert_eq!(
+            find_identical_theme_name(&report.theme),
+            None,
+            "库里只有刚导入的这套，不能跟自己比出重复"
+        );
+    }
+
+    #[test]
+    fn 导入查重_内容相同点名已有主题() {
+        let temp = TempDir::new("import-dup-hit");
+        let _guard = temp.isolate_paths();
+        let entries = vec![
+            ("cursors/arrow.cur".to_string(), fixture_cur()),
+            ("cursors/busy.ani".to_string(), fixture_ani()),
+        ];
+        let first_zip = temp.join("pack-a.zip");
+        zip_with(&first_zip, entries.clone());
+        let second_zip = temp.join("pack-b.zip");
+        zip_with(&second_zip, entries);
+
+        let first = importer::import_source_report(first_zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        let second = importer::import_source_report(second_zip.to_str().unwrap(), &mut |_| {})
+            .expect("二次导入");
+        assert_eq!(
+            find_identical_theme_name(&second.theme)
+                .expect("内容相同的包再次导入应点名已有主题"),
+            first.theme.name,
+            "点名的应是先导入的那套"
+        );
+    }
+
+    #[test]
+    fn 导入查重_内容不同不误报() {
+        let temp = TempDir::new("import-dup-miss");
+        let _guard = temp.isolate_paths();
+        let first_zip = temp.join("pack-a.zip");
+        zip_with(
+            &first_zip,
+            vec![("cursors/arrow.cur".to_string(), fixture_cur())],
+        );
+        // 扩展名与字节数都一样、内容不同：指纹会撞，必须靠字节比对拦住
+        let mut different = fixture_cur();
+        different[10] = different[10].wrapping_add(1);
+        let second_zip = temp.join("pack-b.zip");
+        zip_with(
+            &second_zip,
+            vec![("cursors/arrow.cur".to_string(), different)],
+        );
+
+        let first = importer::import_source_report(first_zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        let second = importer::import_source_report(second_zip.to_str().unwrap(), &mut |_| {})
+            .expect("二次导入");
+        assert_eq!(
+            find_identical_theme_name(&second.theme),
+            None,
+            "只差一个字节就不算重复"
+        );
+        let _ = first;
     }
 }

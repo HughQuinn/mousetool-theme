@@ -24,6 +24,8 @@ export interface ImportReport {
   theme: CursorTheme;
   /** 导入成功但被跳过的内容（典型：链接 / 目录联接） */
   warnings: string[];
+  /** 与库里哪套主题内容完全相同（决策 47，只提示不拦截）；没有重复为 null */
+  duplicate_of: string | null;
 }
 
 /**
@@ -40,6 +42,29 @@ export interface HistoryEntry {
   is_built_in: boolean;
   /** 本地时区，格式 `YYYY-MM-DD HH:mm` */
   applied_at: string;
+}
+
+/**
+ * 一套主题的文件缺口：声明了的槽位里，哪些文件已经读不到（决策 31）
+ *
+ * 后端每次读列表时现算（只 stat 不读内容）；`theme.json` 不落这个字段，
+ * 文件恢复后缺口自动消失。
+ */
+export interface ThemeFileGap {
+  theme_id: string;
+  /** 缺失或不可读槽位的注册表键名，保持主题内声明顺序 */
+  slots: string[];
+}
+
+/**
+ * 一套主题在事件流里的应用次数（决策 53）
+ *
+ * 事件流上限 200 条：这是「最近 200 次以内」的口径，不是历史总数，
+ * 界面要照实说。已删除的主题不在列表里，后端多给的条目自然用不上。
+ */
+export interface ThemeApplyCount {
+  theme_id: string;
+  count: number;
 }
 
 /** 与 Rust 端 `models::ThemesResult` 字段一一对应 */
@@ -61,6 +86,18 @@ export interface ThemesResult {
   active_external: boolean;
   /** 最近主题（由后端事件流派生，按主题去重），最新在前 */
   recent: HistoryEntry[];
+  /**
+   * 文件缺口清单（决策 31）：声明了的槽位文件读不到的主题
+   *
+   * 只列有缺口的主题；「前端旧、Rust 新」的组合里可能是 undefined，读时兜底 `?? []`。
+   */
+  file_gaps: ThemeFileGap[];
+  /**
+   * 各主题在事件流里的应用次数（决策 53）
+   *
+   * 「前端旧、Rust 新」的组合里可能是 undefined，读时兜底 `?? []`。
+   */
+  apply_counts: ThemeApplyCount[];
 }
 
 /** 与 Rust 端 `models::ActiveState` 字段一一对应（`get_active_state`） */
@@ -113,8 +150,31 @@ export interface DeleteOutcome {
   warning: string | null;
 }
 
+/** `delete_themes` 结果里的一条失败项（部分成功语义） */
+export interface BatchDeleteFailure {
+  theme_id: string;
+  error: string;
+}
+
+/** `delete_themes` 的返回值：多选批量移入回收站（决策 43） */
+export interface BatchDeleteOutcome {
+  /** 成功移入回收站的主题 ID，顺序与入参去重后一致 */
+  deleted: string[];
+  /** 被拒绝的主题与原因；其余主题照常删除 */
+  failed: BatchDeleteFailure[];
+  /** 回收站超限时自动清理的旧条目数 */
+  auto_purged: number;
+  /** 非致命问题（典型：跨盘复制后原目录没能完全删除） */
+  warning: string | null;
+}
+
 /** `restore_from_trash` 的返回值 */
 export interface RestoreOutcome {
+  /**
+   * 恢复后的主题 ID：普通恢复 = 原主题 ID；恢复为副本（决策 54）= 新分配的
+   * UUID。旧后端不给这个字段，读时兜底 `?? entry.theme_id`
+   */
+  theme_id: string | null;
   warning: string | null;
 }
 

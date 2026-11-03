@@ -2,7 +2,10 @@ import { create } from "zustand";
 
 import {
   applyTheme as apiApplyTheme,
+  clearHistory as apiClearHistory,
   deleteTheme as apiDeleteTheme,
+  deleteThemes as apiDeleteThemes,
+  exportAllThemes as apiExportAllThemes,
   exportTheme as apiExportTheme,
   getActiveState,
   getAllThemes,
@@ -14,9 +17,11 @@ import {
   restoreDefault as apiRestoreDefault,
   restoreFromTrash as apiRestoreFromTrash,
   saveCurrentTheme as apiSaveCurrentTheme,
+  type ExportAllOutcome,
   type TaskProgress,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
+import { invalidateCursorPreviews } from "@/hooks/useCursorPreview";
 import type { Page } from "@/lib/pages";
 import type { SettingsSection } from "@/lib/settings-sections";
 import {
@@ -26,7 +31,13 @@ import {
   takePendingImport as apiTakePendingImport,
   type ZipMenuStatus,
 } from "@/services/system";
-import type { CursorTheme, HistoryEntry, TrashEntry } from "@/types/theme";
+import type {
+  BatchDeleteOutcome,
+  CursorTheme,
+  HistoryEntry,
+  ThemeFileGap,
+  TrashEntry,
+} from "@/types/theme";
 
 /**
  * 每页各记一份选中项：切页回来还是原来的上下文，又不会把别的页的选择带过来
@@ -53,10 +64,20 @@ function clearSelection(selection: Selection, removedId: string): Selection {
   );
 }
 
+/** 删除主题后顺带失效它名下的预览缓存：文件已移入回收站，旧图不能再显示 */
+function forgetThemePreviews(theme: CursorTheme): void {
+  for (const slot of theme.cursors) {
+    if (slot.file_path) invalidateCursorPreviews(slot.file_path);
+  }
+}
+
 /** 单个动作的忙碌键：`apply:<id>` / `delete:<id>` / `rename:<id>` / `export:<id>` */
 export function actionBusyKey(action: string, id: string): string {
   return `${action}:${id}`;
 }
+
+/** 批量删除不是按主题计的动作，固定占用一个 key；界面与 store 共用同一份 */
+export const BATCH_DELETE_BUSY_KEY = actionBusyKey("delete", "batch");
 
 function withBusyFlag(
   busy: Record<string, boolean>,
@@ -85,6 +106,14 @@ interface ThemeStore {
   currentSlotsFilled: number;
   /** 最近主题，最新在前（后端由事件流派生，每个主题一条） */
   recent: HistoryEntry[];
+  /**
+   * 文件缺口清单（决策 31）：声明了的槽位文件读不到的主题
+   *
+   * 后端每次读列表现算；「我的主题」行内提示、检查器警示条与诊断中心都从这里取。
+   */
+  fileGaps: ThemeFileGap[];
+  /** 各主题在事件流里的应用次数（决策 53），按主题 ID 查表；旧后端给不出时为空对象 */
+  applyCounts: Record<string, number>;
   /** 每个页面各自选中的主题 ID；`recent` 页没有检查器，恒为 null */
   selection: Selection;
   /** 搜索关键词（切页清空，见 setCurrentPage） */
@@ -101,6 +130,10 @@ interface ThemeStore {
   importing: boolean;
   /** 导入进度（解压 / 落盘阶段的人话说明）；null = 没有进行中的导入 */
   importProgress: TaskProgress | null;
+  /** 批量导出进度（来自 `export-all-progress` 事件，决策 34）；null = 没有进行中的批量导出 */
+  exportAllProgress: TaskProgress | null;
+  /** 批量删除进度（来自 `delete-progress` 事件，决策 43）；null = 没有进行中的批量删除 */
+  batchDeleteProgress: TaskProgress | null;
   /**
    * 按动作区分的忙碌状态：键见 `actionBusyKey`
    *
@@ -141,10 +174,35 @@ interface ThemeStore {
   importTheme: (sourcePath: string) => Promise<void>;
   /** 返回是否真的删掉了；确认对话框据此决定关不关 */
   deleteTheme: (id: string) => Promise<boolean>;
-  /** 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里 */
-  restoreTrashEntry: (entry: TrashEntry) => Promise<boolean>;
-  renameTheme: (id: string, newName: string) => Promise<void>;
+  /**
+   * 多选批量移入回收站（决策 43）
+   *
+   * 只提交仍存在、非系统方案、且不是当前使用中的主题；部分成功时把成功项
+   * 从列表移除，失败项留给界面继续显示。返回 null = 没有可提交的目标或
+   * 命令失败（错误已提示）。
+   */
+  deleteThemes: (ids: string[]) => Promise<BatchDeleteOutcome | null>;
+  /**
+   * 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里
+   *
+   * `asCopy = true` 恢复为副本（决策 54）：目标 ID 已被占用时也收下，
+   * 落成新 UUID 的新主题；界面拿返回的 theme_id 选中那份副本。
+   */
+  restoreTrashEntry: (
+    entry: TrashEntry,
+    options?: { asCopy?: boolean },
+  ) => Promise<boolean>;
+  renameTheme: (id: string, newName: string, newDescription?: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
+  /**
+   * 批量导出「我的主题」到指定目录（决策 34）
+   *
+   * `themeIds`（决策 63）：传清单只导选中的主题，undefined = 全部。
+   * 返回结果供界面续接（打开目录等）；null = 没执行（重复点击或失败）。
+   */
+  exportAllThemes: (destDir: string, themeIds?: string[]) => Promise<ExportAllOutcome | null>;
+  /** 清空最近使用记录；返回清掉的条数，null = 没执行（重复点击或失败） */
+  clearHistory: () => Promise<number | null>;
   /** 读一次数据目录路径（幂等，拿到就不再请求） */
   loadDataDir: () => Promise<void>;
   /** 在系统文件管理器打开数据目录 */
@@ -157,6 +215,8 @@ interface ThemeStore {
   toggleZipMenu: () => Promise<void>;
   /** 领取待导入路径并走正常导入流程；没有就静默返回 */
   pickupPendingImport: () => Promise<void>;
+  /** 把主题选在图库与我的主题，并清搜索：导入 / 恢复后应当立刻看得见 */
+  revealTheme: (id: string) => void;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -172,6 +232,8 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   activeExternal: false,
   currentSlotsFilled: 0,
   recent: [],
+  fileGaps: [],
+  applyCounts: {},
   selection: NO_SELECTION,
   searchQuery: "",
   currentPage: "gallery",
@@ -180,6 +242,8 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loading: false,
   importing: false,
   importProgress: null,
+  exportAllProgress: null,
+  batchDeleteProgress: null,
   busy: {},
   loadError: null,
   warnings: [],
@@ -192,8 +256,19 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loadThemes: async () => {
     set({ loading: true, loadError: null });
     try {
-      const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent } =
-        await getAllThemes();
+      const {
+        themes,
+        warnings,
+        active_theme_id,
+        current_slots_filled,
+        active_external,
+        recent,
+        file_gaps,
+        apply_counts,
+      } = await getAllThemes();
+      // 重载意味着文件可能动过了（回收站恢复、目录迁移、外部改写）：
+      // 旧预览一律作废，让界面按新状态重新取图
+      invalidateCursorPreviews();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
       // recent 兜底：前端热更新、后端还是旧二进制时字段会缺失，
@@ -206,6 +281,12 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         activeExternal: active_external ?? false,
         currentSlotsFilled: current_slots_filled ?? 0,
         recent: recent ?? [],
+        // file_gaps 同理兜底：旧后端不认识这个字段，别让缺口提示整体挂掉
+        fileGaps: file_gaps ?? [],
+        // apply_counts（决策 53）同样兜底；只保留仍在列表里的主题
+        applyCounts: Object.fromEntries(
+          (apply_counts ?? []).filter((item) => ids.has(item.theme_id)).map((item) => [item.theme_id, item.count]),
+        ),
         warnings,
         warningsDismissed: false,
         // 只清掉「已经不存在的主题」，其余选择保留：
@@ -253,7 +334,13 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
       const outcome = await apiApplyTheme(theme);
-      set({ activeThemeId: id, activeExternal: false, recent: outcome.recent });
+      set((state) => ({
+        activeThemeId: id,
+        activeExternal: false,
+        recent: outcome.recent,
+        // 次数跟着事件流走：应用成功就地 +1，与「最近使用」同一次更新（决策 53）
+        applyCounts: { ...state.applyCounts, [id]: (state.applyCounts[id] ?? 0) + 1 },
+      }));
       if (!options?.silent) {
         toast.success(
           `已应用「${theme.name}」`,
@@ -354,9 +441,11 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       toast.success(`已导入「${theme.name}」`, `共 ${theme.cursors.length} 个光标槽位`);
       if (warnings.length > 0) {
         for (const warning of warnings) console.warn("[importTheme]", warning);
+        // 提示正文自解释（跳过链接 / 与已有主题内容相同等），标题保持中性，
+        // 不预设「被跳过」这一种原因（决策 47 的重复提示也走这里）
         toast.warning(
-          "导入完成，但有内容被跳过",
-          warnings.length > 1 ? `${warnings[0]}（共 ${warnings.length} 条）` : warnings[0],
+          warnings.length > 1 ? `导入完成，有 ${warnings.length} 条提示` : "导入完成，有 1 条提示",
+          warnings[0],
         );
       }
     } catch (err) {
@@ -387,6 +476,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     try {
       // 前端热更新、后端还是旧二进制时返回值可能为空；删除结果以列表变更为准
       const outcome = (await apiDeleteTheme(id)) ?? { auto_purged: 0, warning: null };
+      forgetThemePreviews(theme);
       set((state) => ({
         themes: state.themes.filter((t) => t.id !== id),
         // 所有页面的选择都要清，不然检查器会挂着一个已经不存在的 ID
@@ -410,21 +500,110 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  restoreTrashEntry: async (entry) => {
+  deleteThemes: async (ids) => {
+    const key = BATCH_DELETE_BUSY_KEY;
+    if (get().busy[key]) return null;
+
+    const activeId = get().activeThemeId;
+    const wanted = new Set(ids);
+    const targets = get().themes.filter(
+      (theme) => wanted.has(theme.id) && !theme.is_built_in && theme.id !== activeId,
+    );
+    if (targets.length === 0) {
+      toast.error("没有可删除的主题", "使用中的主题需要先切换或还原系统默认");
+      return null;
+    }
+
+    const names = new Map(get().themes.map((theme) => [theme.id, theme.name]));
+    set((state) => ({
+      busy: withBusyFlag(state.busy, key, true),
+      batchDeleteProgress: null,
+    }));
+
     try {
-      const outcome = (await apiRestoreFromTrash(entry.id)) ?? { warning: null };
+      const outcome = await apiDeleteThemes(
+        targets.map((theme) => theme.id),
+        (progress) => set({ batchDeleteProgress: progress }),
+      );
+
+      if (outcome.deleted.length > 0) {
+        const removed = new Set(outcome.deleted);
+        for (const theme of targets) {
+          if (removed.has(theme.id)) forgetThemePreviews(theme);
+        }
+        set((state) => ({
+          themes: state.themes.filter((theme) => !removed.has(theme.id)),
+          fileGaps: state.fileGaps.filter((gap) => !removed.has(gap.theme_id)),
+          selection: outcome.deleted.reduce(clearSelection, state.selection),
+        }));
+      }
+
+      const hints = ["可在 设置 → 数据 → 回收站 恢复"];
+      if (outcome.auto_purged > 0) {
+        hints.push(`回收站超出上限，已自动清理最早的 ${outcome.auto_purged} 套`);
+      }
+      const firstFailure = outcome.failed[0];
+      const failureDetail = firstFailure
+        ? `「${names.get(firstFailure.theme_id) ?? firstFailure.theme_id}」${
+            firstFailure.error
+          }${outcome.failed.length > 1 ? `；共 ${outcome.failed.length} 套未删除` : ""}`
+        : "";
+
+      if (outcome.deleted.length === 0) {
+        toast.error("没有删除任何主题", failureDetail || "请重试");
+      } else if (outcome.failed.length === 0) {
+        toast.success(`已移入回收站 ${outcome.deleted.length} 套主题`, hints.join("；"));
+      } else {
+        toast.warning(
+          `已移入回收站 ${outcome.deleted.length} 套，${outcome.failed.length} 套未删除`,
+          `${failureDetail}；${hints.join("；")}`,
+        );
+      }
+      if (outcome.warning) {
+        toast.warning("主题已移入回收站，但收尾没完全成功", outcome.warning);
+      }
+      return outcome;
+    } catch (err) {
+      console.error("批量删除失败：", err);
+      toast.error("批量删除失败", readableError(err));
+      return null;
+    } finally {
+      set((state) => ({
+        busy: withBusyFlag(state.busy, key, false),
+        batchDeleteProgress: null,
+      }));
+    }
+  },
+
+  restoreTrashEntry: async (entry, options) => {
+    const asCopy = options?.asCopy ?? false;
+    try {
+      const outcome =
+        (await apiRestoreFromTrash(entry.id, asCopy)) ?? { theme_id: null, warning: null };
       await get().loadThemes();
-      // 恢复目标可能因为列表读取失败而不在本地列表里；只有确实回来了才选中
-      if (get().themes.some((theme) => theme.id === entry.theme_id)) {
+      // 副本（决策 54）落在新 UUID 下，普通恢复沿用原 ID；旧后端不给 theme_id
+      // 时按原 ID 兜底。恢复目标可能因为列表读取失败而不在本地列表里，
+      // 只有确实回来了才选中
+      const restoredId = outcome.theme_id ?? entry.theme_id;
+      if (get().themes.some((theme) => theme.id === restoredId)) {
         set((state) => ({
           selection: {
             ...state.selection,
-            gallery: entry.theme_id,
-            mine: entry.theme_id,
+            gallery: restoredId,
+            mine: restoredId,
           },
         }));
       }
-      if (outcome.warning) {
+      if (asCopy) {
+        if (outcome.warning) {
+          toast.warning(`已存为副本「${entry.name}」`, outcome.warning);
+        } else {
+          toast.success(
+            `已存为副本「${entry.name}」`,
+            "以新主题 ID 恢复，与主题库里的同名主题并存；可在「我的主题」里改名",
+          );
+        }
+      } else if (outcome.warning) {
         toast.warning(`已恢复「${entry.name}」`, outcome.warning);
       } else {
         toast.success(`已恢复「${entry.name}」`, "已重新出现在主题图库与我的主题里");
@@ -437,12 +616,18 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  renameTheme: async (id, newName) => {
+  renameTheme: async (id, newName, newDescription) => {
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
 
     const name = newName.trim();
-    if (!name || name === theme.name) return;
+    // 补丁语义（决策 62）：描述 undefined = 不动；值都没变就不发请求
+    if (!name) return;
+    if (newDescription === undefined) {
+      if (name === theme.name) return;
+    } else if (name === theme.name && newDescription.trim() === theme.description) {
+      return;
+    }
 
     if (theme.is_built_in) {
       toast.error("系统自带方案不能改名");
@@ -453,14 +638,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     if (get().busy[key]) return;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
-      const updated = await apiRenameTheme(theme, name);
+      const updated = await apiRenameTheme(theme, name, newDescription);
       set((state) => ({
         themes: state.themes.map((t) => (t.id === id ? updated : t)),
       }));
       // 正在使用的主题改名后，注册表里的 SchemeName 还是旧名，需重新应用才同步
       const hint =
         get().activeThemeId === id ? "系统设置里的方案名会在下次应用时更新" : undefined;
-      toast.success(`已改名为「${updated.name}」`, hint);
+      toast.success(`已更新「${updated.name}」`, hint);
     } catch (err) {
       console.error("改名失败：", err);
       toast.error("改名失败", readableError(err));
@@ -486,6 +671,64 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     } catch (err) {
       console.error("导出主题失败：", err);
       toast.error("导出失败", readableError(err));
+    } finally {
+      set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
+    }
+  },
+
+  revealTheme: (id) =>
+    set((state) => ({
+      selection: { ...state.selection, gallery: id, mine: id },
+      // 有搜索词时新主题可能被过滤掉，清空免得「恢复了却看不见」
+      searchQuery: "",
+    })),
+
+  exportAllThemes: async (destDir, themeIds) => {
+    const key = actionBusyKey("export", "all");
+    if (get().busy[key]) return null;
+    set((state) => ({ busy: withBusyFlag(state.busy, key, true), exportAllProgress: null }));
+    try {
+      const outcome = await apiExportAllThemes(destDir, (progress) => {
+        if (get().busy[key]) set({ exportAllProgress: progress });
+      }, themeIds);
+      const parts = [`${outcome.exported.length} 套主题`];
+      if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} 套失败`);
+      if (outcome.warnings.length > 0) parts.push(`${outcome.warnings.length} 条提示`);
+      toast.success(`已导出 ${parts.join("，")}`, `保存到 ${outcome.dir}`);
+      if (outcome.failed.length > 0) {
+        toast.warning(
+          "部分主题没能导出",
+          `${outcome.failed[0].name}：${outcome.failed[0].error}`,
+        );
+      }
+      return outcome;
+    } catch (err) {
+      console.error("批量导出失败：", err);
+      toast.error("批量导出失败", readableError(err));
+      return null;
+    } finally {
+      set((state) => ({ busy: withBusyFlag(state.busy, key, false), exportAllProgress: null }));
+    }
+  },
+
+  clearHistory: async () => {
+    const key = actionBusyKey("clear", "history");
+    if (get().busy[key]) return null;
+    set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
+    try {
+      const count = await apiClearHistory();
+      // 本地列表同步清空：不然「最近使用」页要等下次重载才肯变空。
+      // 次数（决策 53）派生自同一份事件流，一起清零
+      set({ recent: [], applyCounts: {} });
+      toast.success(
+        count > 0 ? `已清空 ${count} 条使用记录` : "没有可清空的使用记录",
+        "主题与设置不受影响",
+      );
+      return count;
+    } catch (err) {
+      console.error("清空使用记录失败：", err);
+      toast.error("清空失败", readableError(err));
+      return null;
     } finally {
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
     }

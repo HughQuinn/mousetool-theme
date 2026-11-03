@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { Archive, Check, MousePointer2, ScanSearch, Trash2 } from "lucide-react";
+import { Archive, Check, MousePointer2, ScanSearch, Trash2, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -8,9 +8,11 @@ import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { CursorGrid } from "@/components/theme/CursorGrid";
 import { SlotMeter } from "@/components/theme/SlotMeter";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
+import { ThemeDescriptionField } from "@/components/theme/ThemeDescriptionField";
 import { ThemeNameField } from "@/components/theme/ThemeNameField";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
+import { missingSlotNames, missingSlotsOf } from "@/lib/themes";
 import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
@@ -57,6 +59,7 @@ function EmptyInspector({ style }: { style: CSSProperties }) {
 
 function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSProperties }) {
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  const fileGaps = useThemeStore((s) => s.fileGaps);
   const applyTheme = useThemeStore((s) => s.applyTheme);
   const busy = useThemeStore((s) => s.busy);
   const { isExporting, pickAndExport } = useExportTheme();
@@ -68,6 +71,17 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
   const exporting = isExporting(theme.id);
   const stats = slotStats(theme);
   const cover = coverSlot(theme);
+  const missingNames = missingSlotNames(theme, missingSlotsOf(fileGaps, theme.id));
+
+  // 右键菜单的「删除」请求（决策 66）：只应答自己这个主题，复用同一个确认框
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail;
+      if (detail?.id === theme.id) setConfirmOpen(true);
+    };
+    window.addEventListener("mousetool:request-delete", onRequest);
+    return () => window.removeEventListener("mousetool:request-delete", onRequest);
+  }, [theme.id]);
 
   // 系统自带方案没有文件可删；正在使用的主题删掉会让注册表指向空文件
   const canDelete = !theme.is_built_in && !isActive;
@@ -78,9 +92,10 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
       : "删除此主题";
 
   // 来源与导入时间合成一行放底部：原先四行 dl 会把 15 个槽位挤出可视区，
-  // 逼用户滚动才能看全一套光标，而这些字面元数据在「我的主题」表格里本来就有
+  // 逼用户滚动才能看全一套光标，而这些字面元数据在「我的主题」表格里本来就有。
+  // 描述不进脚注（决策 62）：它已可编辑、显示在头部，重复一遍没有信息量
   const footnote = [
-    theme.is_built_in ? "系统方案（注册表）" : theme.description || "导入的主题",
+    theme.is_built_in ? "系统方案（注册表）" : "导入的主题",
     theme.updated_at ? `导入于 ${theme.updated_at}` : null,
   ]
     .filter(Boolean)
@@ -106,7 +121,8 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               <h2 className="flex min-w-0 items-center gap-1.5">
                 <ThemeNameField theme={theme} nameClassName="text-base font-medium" />
                 {isActive && (
-                  <span className="shrink-0">
+                  // 入场淡入（决策 64）：同图库卡
+                  <span className="enter-fade shrink-0">
                     <StatusBadge tone="success" dot>
                       使用中
                     </StatusBadge>
@@ -118,6 +134,10 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
                 {` · ${stats.filled} / ${stats.total} 槽位`}
                 {stats.animated > 0 ? ` · ${stats.animated} 个动态` : ""}
               </p>
+              {/* 描述可编辑（决策 62）：紧跟统计行，编辑入口与名称同一套约定 */}
+              <div className="mt-1 min-w-0">
+                <ThemeDescriptionField theme={theme} />
+              </div>
             </div>
           </div>
 
@@ -157,6 +177,22 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               <Trash2 />
             </Button>
           </div>
+
+          {/* 文件缺口警示（决策 31）：放头部不随槽位列表滚走——
+              「应用后这些槽位会被写成空」是应用前必须看见的后果，不是详情 */}
+          {missingNames.length > 0 && (
+            <div
+              data-missing-files
+              role="status"
+              className="mt-2.5 flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 ring-1 ring-warning/25"
+            >
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <p className="text-xs leading-relaxed text-warning">
+                {missingNames.length} 个槽位的光标文件缺失或不可读（{missingNames.join("、")}
+                ）。应用后这些槽位会被写成空，建议重新导入，或在「我的主题」删除该主题。
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-3">

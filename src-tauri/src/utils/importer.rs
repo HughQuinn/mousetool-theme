@@ -6,14 +6,21 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
-use crate::utils::{inf_parse, limits, paths, progress, registry, theme_paths, validation};
+use crate::utils::{inf_parse, limits, log, paths, progress, registry, theme_file, theme_paths, validation};
 
 /// 导入结果：新主题 + 扫描时跳过的非致命问题（典型：链接 / 目录联接）
 #[derive(Debug, Serialize)]
 pub struct ImportReport {
     pub theme: CursorTheme,
     pub warnings: Vec<String>,
+    /// 与库里哪套主题内容完全相同（决策 47，只提示不拦截）；没有重复为 null。
+    /// warnings 里同时有人话版；单独给结构化字段是让界面能各自措辞。
+    pub duplicate_of: Option<String>,
 }
+
+/// `pick_slots` 的返回：按标准槽位顺序排好的 (槽位键, 文件路径) + 包内
+/// `.theme` 的 DisplayName（决策 39，作者命名优先于包文件名）
+type PickedSlots = (Vec<(&'static str, PathBuf)>, Option<String>);
 
 /// 文件名关键字 → 槽位键名
 ///
@@ -146,6 +153,7 @@ fn collect_cursor_files(
 fn collect_inf_files(
     dir: &Path,
     depth: usize,
+    ext: &str,
     budget: &mut limits::ScanBudget<'_>,
     warnings: &mut Vec<String>,
     out: &mut Vec<PathBuf>,
@@ -183,13 +191,13 @@ fn collect_inf_files(
             }
         };
         if is_dir {
-            collect_inf_files(&path, depth + 1, budget, warnings, out)?;
+            collect_inf_files(&path, depth + 1, ext, budget, warnings, out)?;
             continue;
         }
         let is_inf = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("inf"))
+            .map(|candidate| candidate.eq_ignore_ascii_case(ext))
             .unwrap_or(false);
         if is_inf {
             let size = match entry.metadata() {
@@ -219,7 +227,7 @@ fn inf_slot_map(
     warnings: &mut Vec<String>,
 ) -> Result<Vec<(&'static str, String)>, String> {
     let mut candidates = Vec::new();
-    collect_inf_files(files_root, 0, budget, warnings, &mut candidates)?;
+    collect_inf_files(files_root, 0, "inf", budget, warnings, &mut candidates)?;
     candidates.sort();
     for path in candidates {
         // `.inf` 可能是 UTF-16LE（本工具导出的就是），不能先按 UTF-8 解码
@@ -239,6 +247,65 @@ fn inf_slot_map(
         }
     }
     Ok(Vec::new())
+}
+
+/// 解析包里的 `.theme` 方案映射（决策 36/39）：说明书级优先级，仅次于 `.inf`
+///
+/// 与 `.inf` 的差别：`.theme` 的引用可以指向包外（`%SystemRoot%` 的系统
+/// 光标），解析成功的直接给绝对路径；解析不出的槽位不进映射、退回文件名
+/// 推断。多个 `.theme` 时按路径排序取第一个能给出映射的；`display_name`
+/// 一并带回（包文件名 stem 之前先看作者的命名，与决策 36 单文件口径一致）。
+struct ThemeSchemeMap {
+    slots: Vec<(&'static str, PathBuf)>,
+    display_name: Option<String>,
+}
+
+fn theme_scheme_slot_map(
+    files_root: &Path,
+    budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
+) -> Result<ThemeSchemeMap, String> {
+    let mut candidates = Vec::new();
+    collect_inf_files(files_root, 0, "theme", budget, warnings, &mut candidates)?;
+    candidates.sort();
+    for path in candidates {
+        // `.theme` 编码不定（UTF-16LE / ANSI），与 .inf 同一套 BOM 识别
+        let bytes = match limits::read_bytes_bounded(&path, limits::MAX_INF_BYTES) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warnings.push(format!(
+                    "跳过无法读取的 .theme：{}（{err}）",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        let parsed = theme_file::parse_theme_file(&bytes);
+        if parsed.slots.is_empty() {
+            continue;
+        }
+        let base = path
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or_else(|| files_root.to_path_buf());
+        let slots: Vec<(&'static str, PathBuf)> = parsed
+            .slots
+            .into_iter()
+            .filter_map(|(slot, raw)| {
+                resolve_scheme_file(&raw, &base).map(|resolved| (slot, resolved))
+            })
+            .collect();
+        if !slots.is_empty() {
+            return Ok(ThemeSchemeMap {
+                slots,
+                display_name: parsed.display_name,
+            });
+        }
+    }
+    Ok(ThemeSchemeMap {
+        slots: Vec::new(),
+        display_name: None,
+    })
 }
 
 /// 把 zip 解压到临时目录
@@ -333,22 +400,157 @@ fn import_source_as(
         return import_dir_as(source, theme_id, progress_fn);
     }
 
-    // 文件只认 .zip：拖进来一张图片之类的要一句人话，而不是「不是有效的 ZIP」
-    let is_zip = source
+    // 文件只认 .zip 与 .theme：拖进来一张图片之类的要一句人话，而不是「不是有效的 ZIP」
+    let ext = source
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false);
-    if !is_zip {
-        return Err("只支持 .zip 主题包或整个主题文件夹".to_string());
+        .map(|ext| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("zip") => import_zip_as(path, theme_id, progress_fn),
+        Some("theme") => import_scheme_as(source, theme_id, progress_fn),
+        Some("themepack") => import_themepack_as(source, theme_id, progress_fn),
+        _ => Err("只支持 .zip 主题包、.theme 光标方案、.themepack 主题包或整个主题文件夹".to_string()),
     }
-
-    import_zip_as(path, theme_id, progress_fn)
 }
 
 /// 兼容旧名：zip 导入入口（示例 `import_demo` 与「导出 → 再导入」闭环测试在用）
 pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
     import_source_as(zip_path, &Uuid::new_v4().to_string(), &mut |_| {}).map(|report| report.theme)
+}
+
+/// 导入一个 `.themepack` 主题包（决策 39：Windows 主题分发格式，CAB 容器）
+///
+/// 与 zip 同一套流程，只是解档器不同：CAB 走 `cab` crate（限额与条目名
+/// 白名单全部生效），解压到临时目录后走同一条落盘链路；包内带 `.theme` 时
+/// 槽位按方案段映射（决策 36 的解析器复用），退回文件名推断。
+fn import_themepack_as(
+    pack_path: &Path,
+    theme_id: &str,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<ImportReport, String> {
+    let source = Path::new(pack_path);
+    let meta = fs::metadata(source)
+        .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
+    if meta.len() > limits::THEME_LIMITS.max_total_bytes {
+        let mb = meta.len() as f64 / 1024.0 / 1024.0;
+        return Err(format!(
+            "主题包 {mb:.1}MB，超过 {} 上限。请删掉多余的光标或截图后重新打包",
+            limits::THEME_LIMITS.total_hint()
+        ));
+    }
+
+    progress_fn(progress::TaskProgress::new("extract", 0, 0, "正在读取主题包…"));
+    let temp_dir = std::env::temp_dir().join(format!("cursortheme-{theme_id}"));
+    paths::ensure_dir(&temp_dir)?;
+
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    let outcome = extract_themepack(source, &temp_dir, progress_fn).and_then(|()| {
+        let mut budget = limits::ScanBudget::new(&limits::THEME_LIMITS);
+        collect_cursor_files(
+            &temp_dir,
+            0,
+            &mut budget,
+            &mut warnings,
+            &mut files,
+        )?;
+        let theme = persist_theme(
+            files,
+            &temp_dir,
+            source,
+            "主题包",
+            theme_id,
+            &mut budget,
+            &mut warnings,
+            progress_fn,
+        )?;
+        Ok(ImportReport { theme, warnings, duplicate_of: None })
+    });
+    // 无论成败都清理临时目录（超限、解压失败也不会留下半截文件）
+    let _ = fs::remove_dir_all(&temp_dir);
+    outcome.map_err(|err| discard_partial(theme_id, err))
+}
+
+/// 把 `.themepack`（CAB 容器）解压到临时目录
+///
+/// 每个条目先过名称白名单与预算，再分块复制；超限立即返回错误。
+/// CAB 没有目录条目，路径里的目录按需创建。Windows 自带的 `.themepack`
+/// 多为 MSZIP 压缩，`cab` crate 支持；LZX 压缩的罕见老包会在此报错并说明。
+fn extract_themepack(
+    pack_path: &Path,
+    temp_dir: &Path,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<(), String> {
+    let file = File::open(pack_path)
+        .map_err(|err| format!("打不开这个文件，它可能已被移动或删除（{err}）"))?;
+    let mut cabinet = cab::Cabinet::new(file)
+        .map_err(|err| format!("这不是有效的 .themepack（CAB）主题包（{err}）"))?;
+
+    // 压缩格式先卡一遍：LZX / Quantum 的文件夹在读第一个条目时才解压，
+    // 提前检查能在动任何文件之前给出「怎么办」说得清的错误（决策 39 边界）
+    for folder in cabinet.folder_entries() {
+        ensure_supported_compression(folder.compression_type())?;
+    }
+
+    // 条目清单先取全（不可变借用阶段），再逐个读内容
+    let entries: Vec<(String, u32)> = cabinet
+        .folder_entries()
+        .flat_map(|folder| {
+            folder
+                .file_entries()
+                .map(|f| (f.name().to_string(), f.uncompressed_size()))
+        })
+        .collect();
+    if entries.len() > limits::THEME_LIMITS.max_entries {
+        return Err(format!(
+            "主题包里的条目太多（{} 个，上限 {}），已停止导入",
+            entries.len(),
+            limits::THEME_LIMITS.max_entries
+        ));
+    }
+
+    let mut budget = limits::ArchiveBudget::new(&limits::THEME_LIMITS);
+    let mut throttle = progress::ProgressThrottle::new(entries.len());
+    let total = entries.len();
+    for (index, (name, declared)) in entries.into_iter().enumerate() {
+        let Some(parts) = limits::safe_relative_parts(&name, &limits::THEME_LIMITS)? else {
+            continue;
+        };
+        // 声明大小先卡上限，避免为一个注定失败的条目做无谓解压
+        if u64::from(declared) > limits::THEME_LIMITS.max_file_bytes {
+            return Err(format!(
+                "主题包里的「{name}」有 {}MB，超过单文件 {} 上限",
+                declared as f64 / 1024.0 / 1024.0,
+                limits::THEME_LIMITS.file_hint()
+            ));
+        }
+        budget.note_entry()?;
+        let out_path = limits::join_parts(temp_dir, &parts);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| format!("创建目录失败：{err}"))?;
+        }
+        let mut out_file = File::create(&out_path).map_err(|err| format!("写入文件失败：{err}"))?;
+        let mut reader = cabinet
+            .read_file(&name)
+            .map_err(|err| format!("读取主题包条目失败：{err}"))?;
+        let written = limits::copy_bounded(
+            &mut reader,
+            &mut out_file,
+            budget.allowance(),
+            &limits::THEME_LIMITS,
+        )?;
+        budget.commit(written)?;
+
+        if throttle.step(index + 1) {
+            progress_fn(progress::TaskProgress::new(
+                "extract",
+                index + 1,
+                total,
+                format!("正在解压（{}/{}）", index + 1, total),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 导入 zip 主题包：解压到临时目录后，走与文件夹相同的落盘流程
@@ -393,7 +595,7 @@ fn import_zip_as(
             &mut warnings,
             progress_fn,
         )?;
-        Ok(ImportReport { theme, warnings })
+        Ok(ImportReport { theme, warnings, duplicate_of: None })
     });
     // 无论成败都清理临时目录（超限、解压失败也不会留下半截文件）
     let _ = fs::remove_dir_all(&temp_dir);
@@ -425,7 +627,155 @@ fn import_dir_as(
         progress_fn,
     )
     .map_err(|err| discard_partial(theme_id, err))?;
-    Ok(ImportReport { theme, warnings })
+    Ok(ImportReport { theme, warnings, duplicate_of: None })
+}
+
+/// 导入一个 `.theme` 光标方案文件（决策 36：Windows 主题方案收编）
+///
+/// `.theme` 只描述方案——每个槽位指向一个磁盘上的光标文件（`%SystemRoot%`
+/// 展开的系统光标，或主题包解开后与方案文件同目录的相对路径）。收编 = 按槽位
+/// 把引用的文件复制进新主题目录，语义与「保存当前光标」一致：源文件留在原地。
+/// 引用的文件缺失 / 不是光标格式只跳过该槽位并说明；一个可用槽位都没有才失败。
+fn import_scheme_as(
+    source: &Path,
+    theme_id: &str,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<ImportReport, String> {
+    progress_fn(progress::TaskProgress::new("scan", 0, 0, "正在读取光标方案…"));
+    // .theme 是文本，1MB 上限与 .inf 同口径（超限说明不是正经方案文件）
+    let bytes = limits::read_bytes_bounded(source, limits::MAX_INF_BYTES)
+        .map_err(|err| format!("读不了这个方案文件（{err}）"))?;
+    let parsed = theme_file::parse_theme_file(&bytes);
+    // .themepack 解开后光标与 .theme 同目录：相对路径以方案文件所在目录为基准
+    let base = source.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+    let mut warnings: Vec<String> = Vec::new();
+    let outcome = (|| -> Result<CursorTheme, String> {
+        let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
+        for (slot, raw) in &parsed.slots {
+            let (display, _) = slot_names(slot);
+            match resolve_scheme_file(raw, &base) {
+                None => warnings.push(format!(
+                    "方案引用的光标文件找不到，「{display}」槽位已跳过：{raw}"
+                )),
+                Some(path) => {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_ascii_lowercase())
+                        .unwrap_or_default();
+                    if !validation::is_cursor_extension(&ext) {
+                        warnings.push(format!(
+                            "方案引用的不是 .cur/.ani 光标文件，「{display}」槽位已跳过：{raw}"
+                        ));
+                        continue;
+                    }
+                    // 链接 / 目录联接不收：跟过去可能把主题目录外的真身复制走
+                    if limits::is_reparse_path(&path) {
+                        warnings.push(format!(
+                            "方案引用的是链接或目录联接，「{display}」槽位已跳过：{raw}"
+                        ));
+                        continue;
+                    }
+                    picked.push((slot, path));
+                }
+            }
+        }
+        if picked.is_empty() {
+            // 两种「空」要分开说：Windows 自带的 aero.theme 一类方案全是
+            // 空值（用系统默认光标），与引用落空是不同的问题、不同的建议
+            return Err(if parsed.slots.is_empty() {
+                "这个方案用的是系统默认光标（所有槽位值都是空），没有可收编的内容。请换一个自定义了光标的方案文件".to_string()
+            } else {
+                "方案引用的光标文件都找不到或不是 .cur/.ani 格式，没有可收编的内容。若方案来自别的机器，请把它引用的光标文件与方案放在同一目录再导入".to_string()
+            });
+        }
+
+        let slots = copy_slots(picked, theme_id, progress_fn)?;
+        let mut theme = build_theme(theme_id, source, slots);
+        if let Some(name) = parsed.display_name.clone() {
+            theme.name = name;
+        }
+        // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
+        theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
+        progress_fn(progress::TaskProgress::new(
+            "done",
+            theme.cursors.len(),
+            theme.cursors.len(),
+            "导入完成",
+        ));
+        Ok(theme)
+    })()
+    .map_err(|err| discard_partial(theme_id, err));
+    outcome.map(|theme| ImportReport { theme, warnings, duplicate_of: None })
+}
+
+/// 压缩格式白名单：`cab` crate 只能解 None / MSZIP；LZX / Quantum（老
+/// Windows 更新补丁常用的压缩）不支持，提前给出带出路的错误
+fn ensure_supported_compression(ctype: cab::CompressionType) -> Result<(), String> {
+    match ctype {
+        cab::CompressionType::None | cab::CompressionType::MsZip => Ok(()),
+        cab::CompressionType::Quantum(..) | cab::CompressionType::Lzx(..) => Err(
+            "这份 .themepack 用了 LZX / Quantum 压缩，暂不支持。请先用 7-Zip 等工具解包，把解出的文件夹整个拖进窗口导入".to_string(),
+        ),
+    }
+}
+
+/// 展开方案路径里的 `%Var%` 环境变量（大小写不敏感；找不到的变量原样保留）
+fn expand_env_vars(value: &str) -> String {
+    if !value.contains('%') {
+        return value.to_string();
+    }
+    let vars: Vec<(String, String)> = std::env::vars().collect();
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match vars
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, val)| val.clone())
+                {
+                    Some(val) => out.push_str(&val),
+                    // 展不开的变量原样保留：路径按「不存在」走，警告里看得见原文
+                    None => out.push_str(&rest[start..start + end + 2]),
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 把方案里的路径值解析到磁盘上的真实文件；找不到返回 None（由调用方警告）
+///
+/// 顺序：环境变量展开 → 绝对路径直接用 → 相对路径按方案文件所在目录拼。
+fn resolve_scheme_file(raw: &str, base: &Path) -> Option<PathBuf> {
+    let expanded = expand_env_vars(raw);
+    if expanded.contains('%') {
+        // 还有展不开的变量：路径肯定不成立，别让它碰巧拼进主题目录
+        return None;
+    }
+    let candidate = PathBuf::from(&expanded);
+    let path = if candidate.is_absolute() {
+        candidate
+    } else {
+        base.join(candidate)
+    };
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 /// 失败时清掉半成品主题目录，返回原始错误
@@ -470,10 +820,14 @@ fn persist_theme(
         });
     }
 
-    let picked = pick_slots(&files, files_root, budget, warnings)?;
+    let (picked, scheme_display_name) = pick_slots(&files, files_root, budget, warnings)?;
     let total = picked.len();
     let slots = copy_slots(picked, theme_id, progress_fn)?;
-    let theme = build_theme(theme_id, source, slots);
+    let mut theme = build_theme(theme_id, source, slots);
+    // 包内 .theme 的 DisplayName 比包文件名更代表作者意图（决策 36/39）
+    if let Some(name) = scheme_display_name {
+        theme.name = name;
+    }
 
     // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
     theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
@@ -482,15 +836,17 @@ fn persist_theme(
     Ok(theme)
 }
 
-/// 选出要落盘的槽位：先按 `.inf` 说明书映射，剩余槽位退回文件名推断
+/// 选出要落盘的槽位：先按 `.inf` 说明书映射，再按 `.theme` 方案映射，
+/// 剩余槽位退回文件名推断
 ///
 /// 说明书指了名但包里没有那个文件时，该槽位也退回推断，不因此缺槽位（决策 15）。
+/// 返回值附带 `.theme` 的 `DisplayName`（决策 39：作者命名优先于包文件名）。
 fn pick_slots(
     files: &[PathBuf],
     files_root: &Path,
     budget: &mut limits::ScanBudget<'_>,
     warnings: &mut Vec<String>,
-) -> Result<Vec<(&'static str, PathBuf)>, String> {
+) -> Result<PickedSlots, String> {
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
 
@@ -511,7 +867,24 @@ fn pick_slots(
         }
     }
 
+    // .theme 方案映射（决策 36/39）：包内带 .theme 时槽位按方案段映射，
+    // 优先于文件名推断；引用可以指向包外（系统光标），解析不出的槽位
+    // 同样放开给推断兜底；作者的 DisplayName 随映射带回
+    let theme_map = theme_scheme_slot_map(files_root, budget, warnings)?;
+    for (slot, path) in theme_map.slots {
+        if seen.insert(slot) {
+            picked.push((slot, path));
+        }
+    }
+
+    // 已被说明书 / 方案映射认领的文件不再参与文件名推断：映射是作者的
+    // 权威声明，同一文件再被推断进别的槽位多半是巧合撞名（决策 39 起，
+    // .theme 映射与 .inf 同权认领）
+    let claimed: HashSet<PathBuf> = picked.iter().map(|(_, path)| path.clone()).collect();
     for file in files {
+        if claimed.contains(file) {
+            continue;
+        }
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -539,7 +912,7 @@ fn pick_slots(
             .unwrap_or(usize::MAX)
     });
 
-    Ok(picked)
+    Ok((picked, theme_map.display_name))
 }
 
 /// 把选中的光标文件复制进主题目录；与 zip 解压共用单文件上限
@@ -648,7 +1021,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过链接或目录联接主题目录：{}",
                     entry.path().display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -659,7 +1032,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过主题目录 {}（theme.json 是链接或目录联接）",
                     dir.display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -672,7 +1045,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 Ok(text) => text,
                 Err(err) => {
                     let msg = format!("跳过主题目录 {}（读不到 theme.json：{err}）", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     return None;
                 }
@@ -689,7 +1062,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             "跳过主题目录 {}（theme.json 声明为系统方案，用户主题不能自称系统方案）",
                             dir.display()
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -700,7 +1073,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             dir.display(),
                             theme.id
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -737,7 +1110,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 }
                 Err(err) => {
                     let msg = format!("跳过损坏的 theme.json {}：{err}", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     None
                 }
@@ -1189,7 +1562,7 @@ mod tests {
         let mut budget = limits::ScanBudget::new(&limits::THEME_LIMITS);
         let mut warnings = Vec::new();
         let mut files = Vec::new();
-        let err = collect_inf_files(temp.path(), 0, &mut budget, &mut warnings, &mut files)
+        let err = collect_inf_files(temp.path(), 0, "inf", &mut budget, &mut warnings, &mut files)
             .unwrap_err();
         assert!(err.contains("文件太多"), "实际：{err}");
     }
@@ -1214,5 +1587,333 @@ mod tests {
             warnings.iter().any(|w| w.contains("上限")),
             "警告要说明尺寸超限：{warnings:?}"
         );
+    }
+
+    fn write_scheme(path: &Path, body: &str) {
+        fs::write(path, body).expect("写方案文件");
+    }
+
+    #[test]
+    fn 能导入_theme_方案文件() {
+        let temp = TempDir::new("theme-scheme");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("pack");
+        fs::create_dir_all(&pack).expect("建包目录");
+        fs::write(pack.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        fs::write(pack.join("busy.ani"), fixture_ani()).expect("写忙碌");
+        let scheme = pack.join("sports.theme");
+        write_scheme(
+            &scheme,
+            "[Theme]\r\nDisplayName=Sports\r\n[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\nWait=busy.ani\r\nNWPen=missing.cur\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.name, "Sports", "DisplayName 优先于文件名");
+        let keys: Vec<&str> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| slot.registry_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["Arrow", "Wait"], "缺失引用的槽位不出现");
+        assert!(
+            report.warnings.iter().any(|w| w.contains("已跳过") && w.contains("missing.cur")),
+            "缺文件要进警告：{:?}",
+            report.warnings
+        );
+        // 返回给前端的槽位是运行时绝对路径，落盘的 theme.json 是相对路径
+        assert!(
+            Path::new(&report.theme.cursors[0].file_path).is_absolute(),
+            "返回路径应为绝对：{}",
+            report.theme.cursors[0].file_path
+        );
+        let raw = fs::read_to_string(
+            paths::theme_dir(&report.theme.id)
+                .expect("主题目录")
+                .join("theme.json"),
+        )
+        .expect("读 theme.json");
+        assert!(raw.contains("arrow.cur"), "落盘应是相对路径：{raw}");
+        assert!(!raw.contains(&pack.to_string_lossy().to_string()), "不能落绝对路径：{raw}");
+    }
+
+    #[test]
+    fn 方案没有显示名时用文件名stem() {
+        let temp = TempDir::new("theme-scheme-stem");
+        let _guard = temp.isolate_paths();
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        let scheme = temp.join("夜航.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.name, "夜航");
+    }
+
+    #[test]
+    fn 方案引用全缺时报错且不残留() {
+        let temp = TempDir::new("theme-scheme-missing");
+        let _guard = temp.isolate_paths();
+        let scheme = temp.join("ghost.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=nowhere.cur\r\n",
+        );
+
+        let err = import_source_report(scheme.to_str().unwrap(), &mut |_| {}).unwrap_err();
+        assert!(
+            err.contains("引用的光标文件都找不到"),
+            "引用落空要点破：{err}"
+        );
+        // 半成品目录不能留下：下次启动会多一条「跳过主题目录」的警告
+        let themes_root = paths::themes_dir().expect("主题根");
+        let leftovers = fs::read_dir(&themes_root)
+            .expect("读主题根")
+            .count();
+        assert_eq!(leftovers, 0, "不应残留主题目录");
+    }
+
+    #[test]
+    fn 全空方案报系统默认并给指引() {
+        // Windows 自带的 aero.theme 一类方案光标段全是空值：不是坏包，是不用换
+        let temp = TempDir::new("theme-scheme-empty");
+        let _guard = temp.isolate_paths();
+        let scheme = temp.join("aero.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=\r\nWait=\r\nDefaultValue=Windows default\r\n",
+        );
+
+        let err = import_source_report(scheme.to_str().unwrap(), &mut |_| {}).unwrap_err();
+        assert!(
+            err.contains("系统默认光标") && err.contains("没有可收编的内容"),
+            "全空方案要说明是用系统默认：{err}"
+        );
+        let themes_root = paths::themes_dir().expect("主题根");
+        assert_eq!(fs::read_dir(&themes_root).expect("读主题根").count(), 0);
+    }
+
+    #[test]
+    fn 方案里非光标文件被跳过并说明() {
+        let temp = TempDir::new("theme-scheme-ico");
+        let _guard = temp.isolate_paths();
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        fs::write(temp.join("brand.png"), b"png").expect("写图标");
+        let scheme = temp.join("mixed.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\nHand=brand.png\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.cursors.len(), 1);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains(".cur/.ani") && w.contains("brand.png")),
+            "非光标文件要进警告：{:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn 环境变量展开与未知变量保留() {
+        std::env::var("SystemRoot").map_or_else(
+            |_| {} /* 非 Windows 环境没有 SystemRoot，跳过展开断言 */,
+            |root| {
+                assert_eq!(
+                    expand_env_vars("%SystemRoot%\\a.cur"),
+                    format!("{root}\\a.cur")
+                );
+            },
+        );
+        assert_eq!(expand_env_vars("plain.cur"), "plain.cur");
+        let kept = expand_env_vars("%CursorStudioNoSuchVar9%\\a.cur");
+        assert!(kept.contains("%CursorStudioNoSuchVar9%"), "展不开的变量原样保留：{kept}");
+        // 展不开就解析不出文件：不给路径碰巧成立的机会
+        assert_eq!(resolve_scheme_file("%CursorStudioNoSuchVar9%\\a.cur", Path::new(".")), None);
+    }
+
+    #[test]
+    fn 压缩格式白名单放行_mszip_拦下_lzx() {
+        assert!(ensure_supported_compression(cab::CompressionType::None).is_ok());
+        assert!(ensure_supported_compression(cab::CompressionType::MsZip).is_ok());
+
+        let err = ensure_supported_compression(cab::CompressionType::Lzx(cab::WindowSize::KB64))
+            .expect_err("LZX 应被拦下");
+        assert!(
+            err.contains("LZX") && err.contains("7-Zip"),
+            "要给出解包出路：{err}"
+        );
+        let err = ensure_supported_compression(cab::CompressionType::Quantum(1, 1))
+            .expect_err("Quantum 应被拦下");
+        assert!(err.contains("LZX / Quantum"), "{err}");
+    }
+
+    #[test]
+    fn 相对路径按方案文件所在目录解析() {
+        let temp = TempDir::new("theme-scheme-relative");
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        let resolved = resolve_scheme_file("arrow.cur", temp.path());
+        assert_eq!(
+            resolved.expect("应解析到"),
+            temp.join("arrow.cur"),
+            "相对路径以方案文件目录为基准"
+        );
+        assert_eq!(resolve_scheme_file("missing.cur", temp.path()), None);
+    }
+
+    fn utf16le_bytes(text: &str) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            out.extend_from_slice(&unit.to_le_bytes());
+        }
+        out
+    }
+
+    fn cab_with(path: &Path, entries: Vec<(String, Vec<u8>)>) {
+        cab_with_compression(path, cab::CompressionType::None, entries);
+    }
+
+    fn cab_with_compression(
+        path: &Path,
+        ctype: cab::CompressionType,
+        entries: Vec<(String, Vec<u8>)>,
+    ) {
+        let file = File::create(path).expect("建 cab");
+        let mut builder = cab::CabinetBuilder::new();
+        {
+            let folder = builder.add_folder(ctype);
+            for (name, _) in &entries {
+                folder.add_file(name.clone());
+            }
+        }
+        let mut writer = builder.build(file).expect("建 writer");
+        for (_, data) in &entries {
+            let mut file_writer = writer
+                .next_file()
+                .expect("next_file")
+                .expect("声明过的文件还在");
+            file_writer.write_all(data).expect("写条目内容");
+        }
+        writer.finish().expect("收尾");
+    }
+
+    #[test]
+    fn 能导入_themepack_且方案映射优先于文件名推断() {
+        let temp = TempDir::new("themepack");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("夜航.themepack");
+        // .theme 只映射 Arrow，且故意指向「按文件名会被认成 NWPen」的文件——
+        // 如果映射没生效，pen.cur 会跑到 NWPen 槽位、Arrow 反而缺位
+        let theme_text = "[Control Panel\\Cursors]\r\nArrow=pen.cur\r\n";
+        let pen_bytes = b"pen-cursor-bytes".to_vec();
+        cab_with(
+            &pack,
+            vec![
+                ("夜航.theme".to_string(), utf16le_bytes(theme_text)),
+                ("pen.cur".to_string(), pen_bytes.clone()),
+                ("busy.ani".to_string(), fixture_ani()),
+                ("DesktopBackground/bg.jpg".to_string(), b"jpeg".to_vec()),
+                ("readme.txt".to_string(), b"txt".to_vec()),
+            ],
+        );
+
+        let report = import_source_report(pack.to_str().unwrap(), &mut |_| {}).expect("导入");
+        assert_eq!(report.theme.name, "夜航", "主题名取包文件名 stem");
+        let slots: Vec<(String, String)> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| (slot.registry_key.clone(), slot.file_type.clone()))
+            .collect();
+        assert!(
+            slots.iter().any(|(key, _)| key == "Arrow") && slots.iter().any(|(key, _)| key == "Wait"),
+            "Arrow 按映射、busy.ani 按推断：{slots:?}"
+        );
+        assert!(
+            !slots.iter().any(|(key, _)| key == "NWPen"),
+            "pen.cur 被映射到 Arrow，不该再被推断进 NWPen：{slots:?}"
+        );
+        assert_eq!(report.theme.cursors[0].file_type, "cur");
+        // 映射文件的内容被复制进主题目录
+        let raw = fs::read(&report.theme.cursors[0].file_path).expect("读复制结果");
+        assert_eq!(raw, pen_bytes, "Arrow 槽位内容来自 pen.cur");
+        // 壁纸 / 说明文件不进槽位
+        assert_eq!(report.theme.cursors.len(), 2, "{slots:?}");
+    }
+
+    #[test]
+    fn themepack_方案引用缺失时槽位退回推断() {
+        let temp = TempDir::new("themepack-fallback");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("孤例.themepack");
+        let theme_text = "[Control Panel\\Cursors]\r\nArrow=ghost.cur\r\n";
+        cab_with(
+            &pack,
+            vec![
+                ("孤例.theme".to_string(), utf16le_bytes(theme_text)),
+                ("hand.cur".to_string(), fixture_cur()),
+            ],
+        );
+
+        let report = import_source_report(pack.to_str().unwrap(), &mut |_| {}).expect("导入");
+        let keys: Vec<&str> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| slot.registry_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["Hand"], "ghost.cur 不存在，Arrow 放开、hand.cur 走推断：{keys:?}");
+    }
+
+    #[test]
+    fn 非_cab_垃圾包报人话且不残留() {
+        let temp = TempDir::new("themepack-junk");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("假的.themepack");
+        fs::write(&pack, b"definitely not a cabinet").expect("写垃圾");
+
+        let err = import_source_report(pack.to_str().unwrap(), &mut |_| {}).unwrap_err();
+        assert!(err.contains("themepack"), "要说明不是有效的 CAB 主题包：{err}");
+        let themes_root = paths::themes_dir().expect("主题根");
+        assert_eq!(fs::read_dir(&themes_root).expect("读主题根").count(), 0, "不残留半成品");
+    }
+
+    #[test]
+    fn mszip_压缩的_themepack_照常导入() {
+        // Windows 个性化打包 .themepack 用的是 MSZIP——这条路径必须与 None 同权
+        let temp = TempDir::new("themepack-mszip");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("压缩夜航.themepack");
+        let theme_text = "[Control Panel\\Cursors]\r\nArrow=pen.cur\r\n";
+        let pen_bytes = vec![0x5Au8; 300_000]; // 跨多个 MSZIP 块（32KB CFDATA 上限）
+        cab_with_compression(
+            &pack,
+            cab::CompressionType::MsZip,
+            vec![
+                ("夜航.theme".to_string(), utf16le_bytes(theme_text)),
+                ("pen.cur".to_string(), pen_bytes.clone()),
+                ("busy.ani".to_string(), fixture_ani()),
+            ],
+        );
+
+        let report = import_source_report(pack.to_str().unwrap(), &mut |_| {}).expect("导入");
+        assert_eq!(report.theme.name, "压缩夜航");
+        let keys: Vec<&str> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| slot.registry_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["Arrow", "Wait"], "{keys:?}");
+        let raw = fs::read(&report.theme.cursors[0].file_path).expect("读复制结果");
+        assert_eq!(raw, pen_bytes, "MSZIP 解出的内容要一字不差");
     }
 }

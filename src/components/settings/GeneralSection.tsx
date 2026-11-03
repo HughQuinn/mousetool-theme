@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Monitor, Moon, Sun } from "lucide-react";
 
@@ -10,6 +10,8 @@ import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner
 import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
 import { autoSwitchTargetId } from "@/lib/auto-switch";
 import { resolveGuardTarget, restoreNow } from "@/lib/cursor-guard";
+import { isScheduleInWindow } from "@/lib/schedule-switch";
+import { ROTATE_INTERVAL_OPTIONS, rotationYields } from "@/lib/theme-rotate-core";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
@@ -24,8 +26,9 @@ const THEME_MODES = [
 ] as const;
 
 const CLOSE_BEHAVIORS = [
-  { value: "exit", label: "直接退出" },
+  { value: "ask", label: "每次询问" },
   { value: "tray", label: "最小化到托盘" },
+  { value: "exit", label: "直接退出" },
 ] as const;
 
 /**
@@ -90,6 +93,11 @@ export function GeneralSection() {
   const recent = useThemeStore((s) => s.recent);
   const themes = useThemeStore((s) => s.themes);
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  // 轮换候选数（决策 55）：不足两套时状态行要说明「没有可换的」
+  const mineCount = useMemo(
+    () => themes.filter((theme) => !theme.is_built_in).length,
+    [themes],
+  );
   const themesLoading = useThemeStore((s) => s.loading);
   const themesLoadError = useThemeStore((s) => s.loadError);
   const busy = useThemeStore((s) => s.busy);
@@ -241,6 +249,113 @@ export function GeneralSection() {
         </SettingCard>
 
         <SettingCard
+          title="定时切换主题"
+          description="在设定的时间段内自动应用「期间内主题」，时间段外应用「期间外主题」；开始晚于结束视为跨零点（如 22:00–06:00）。手动「还原默认」会暂停切换，到下一个时间点恢复"
+          action={
+            <Toggle
+              label="定时切换主题"
+              checked={settings?.schedule_switch_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ schedule_switch_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          {settings && (
+            <div className="mt-3 grid gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-muted-foreground">时间段</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    aria-label="时间段开始"
+                    data-schedule-start
+                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={settings.schedule_start}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        void patchSettings({ schedule_start: event.target.value });
+                      }
+                    }}
+                  />
+                  <span className="text-2xs text-muted-foreground">至</span>
+                  <input
+                    type="time"
+                    aria-label="时间段结束"
+                    data-schedule-end
+                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={settings.schedule_end}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        void patchSettings({ schedule_end: event.target.value });
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <ThemeMappingSelect
+                label="期间内主题"
+                value={settings.schedule_in_id ?? ""}
+                onChange={(id) => void patchSettings({ schedule_in_id: id })}
+              />
+              <ThemeMappingSelect
+                label="期间外主题"
+                value={settings.schedule_out_id ?? ""}
+                onChange={(id) => void patchSettings({ schedule_out_id: id })}
+              />
+              <p data-schedule-window className="text-2xs text-muted-foreground">
+                {isScheduleInWindow(settings)
+                  ? "当前处于时间段内，使用「期间内主题」"
+                  : "当前处于时间段外，使用「期间外主题」"}
+              </p>
+            </div>
+          )}
+        </SettingCard>
+
+        <SettingCard
+          title="定时轮换主题"
+          description="到设定间隔就应用「我的主题」里的下一套，循环推进（至少导入两套才有得换）。轮换是优先级最低的自动行为：跟随系统切换或定时切换开启时让位；手动「还原默认」后挂起，到下一个周期恢复"
+          action={
+            <Toggle
+              label="定时轮换主题"
+              checked={settings?.rotate_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ rotate_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          {settings && (
+            <div className="mt-3 grid gap-2">
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-muted-foreground">轮换间隔</span>
+                <select
+                  aria-label="轮换间隔"
+                  data-rotate-select
+                  className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  value={settings.rotate_interval_minutes}
+                  disabled={!settings.rotate_enabled}
+                  onChange={(event) =>
+                    void patchSettings({ rotate_interval_minutes: Number(event.target.value) })
+                  }
+                >
+                  {ROTATE_INTERVAL_OPTIONS.map((option) => (
+                    <option key={option.minutes} value={option.minutes}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p data-rotate-status className="text-2xs text-muted-foreground">
+                {rotationYields(settings)
+                  ? "已让位：跟随系统切换或定时切换开启期间，轮换暂停"
+                  : mineCount < 2
+                    ? "「我的主题」不足两套，暂无可轮换的候选"
+                    : "将在「我的主题」里按名称顺序循环应用"}
+              </p>
+            </div>
+          )}
+        </SettingCard>
+
+        <SettingCard
           title="光标守护"
           description="启动时或检测到光标被系统设置改写后，自动恢复上次使用的主题；只恢复主题库里仍在的方案，需要应用正在运行（可配合开机自启动），自动切换开启时优先用当前深浅色的配对主题"
           action={
@@ -318,13 +433,15 @@ export function GeneralSection() {
           title="关闭行为"
           description={
             settings?.close_behavior === "tray"
-              ? "关窗口后程序缩到托盘继续运行；单击托盘图标或右键菜单可回到主界面"
-              : "关窗口即退出程序"
+              ? "关窗口后程序缩到托盘继续运行，定时切换等自动行为不受影响；单击托盘图标或右键菜单可回到主界面"
+              : settings?.close_behavior === "ask"
+                ? "关窗口时弹窗询问：最小化到托盘可让自动行为继续跑，退出应用则全部停止；勾「不再询问」记住这次的选择"
+                : "关窗口即退出程序，定时切换、定时轮换、光标守护等自动行为随之停止"
           }
           action={
             <Segmented
               label="关闭行为"
-              value={settings?.close_behavior ?? "exit"}
+              value={settings?.close_behavior ?? "ask"}
               options={CLOSE_BEHAVIORS.map((item) => ({
                 value: item.value as CloseBehavior,
                 label: item.label,

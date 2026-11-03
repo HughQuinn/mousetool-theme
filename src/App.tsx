@@ -13,12 +13,19 @@ import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { ImportCenterDialog } from "@/components/import/ImportCenterDialog";
+import { CloseAskDialog } from "@/components/layout/CloseAskDialog";
+import { SplashOverlay } from "@/components/layout/SplashOverlay";
 import { Toaster } from "@/components/ui/toaster";
+import { QuickSwitcher } from "@/components/layout/QuickSwitcher";
+import { installPressWater } from "@/components/ui/press-water";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
 import { initAutoSwitch } from "@/lib/auto-switch";
+import { initAutoBackup } from "@/lib/auto-backup";
 import { initCursorGuard } from "@/lib/cursor-guard";
+import { initScheduleSwitch } from "@/lib/schedule-switch";
+import { initThemeRotate } from "@/lib/theme-rotate";
 import { initShortcuts } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { checkForUpdates } from "@/lib/update-check";
@@ -50,6 +57,7 @@ function App() {
   const refreshActive = useThemeStore((s) => s.refreshActive);
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
+  const themesLoading = useThemeStore((s) => s.loading);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
   const { dragActive } = useDragDropImport();
   const updateChecked = useRef(false);
@@ -67,9 +75,25 @@ function App() {
   // 设置与主题列表变更三类时机评估一次；还原默认会挂起，见 lib/auto-switch.ts
   useEffect(() => initAutoSwitch(), []);
 
+  // 定时切换主题（「设置 → 通用」可配，默认关闭）：时间段内外应用配对主题，
+  // 边界用 setTimeout 到点评估、不轮询；见 lib/schedule-switch.ts（决策 33）
+  useEffect(() => initScheduleSwitch(), []);
+
+  // 定时轮换主题（「设置 → 通用」可配，默认关闭）：按间隔在「我的主题」里
+  // 循环应用，是优先级最低的自动行为（前两者开启时让位）；见 lib/theme-rotate.ts（决策 55）
+  useEffect(() => initThemeRotate(), []);
+
   // 光标守护（「设置 → 通用」可配，默认关闭）：启动检查 + 聚焦发现外部改写后
   // 自动恢复上次使用的主题；不轮询，见 lib/cursor-guard.ts
   useEffect(() => initCursorGuard(), []);
+
+  // 按压水滴反馈（决策 60）：凡 motion-press 按钮按下荡开涟漪、松开水珠晃动；
+  // 全局委托一份（侧栏导航等 buttonVariants 原生按钮同样覆盖），见 ui/press-water.ts
+  useEffect(() => installPressWater(), []);
+
+  // 自动备份（「设置 → 数据」可配，默认关闭）：启动就绪后、窗口聚焦节流后
+  // 各触发一次，当日去重与过期清理在命令层；见 lib/auto-backup.ts（决策 32）
+  useEffect(() => initAutoBackup(), []);
 
   // 启动时自动检查更新（「设置 → 通用」可关）：只在发现新版本时提示，
   // 检查失败静默——启动不是报错的场合。每次启动最多查一次
@@ -142,7 +166,12 @@ function App() {
       </div>
       <DropOverlay active={dragActive} />
       <ImportCenterDialog />
+      <QuickSwitcher />
+      {/* 关窗询问（决策 57）：Rust 拦下关窗后发事件，弹窗让用户选去留 */}
+      <CloseAskDialog />
       <Toaster />
+      {/* 开屏遮罩：settings 与主题首次加载都落定后淡出；浏览器 mock（检查脚本）不渲染 */}
+      <SplashOverlay ready={settings !== null && !themesLoading} />
     </>
   );
 }

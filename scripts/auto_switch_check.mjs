@@ -5,7 +5,7 @@
 // - 还原默认 → 挂起（不被立刻覆盖）；下次深浅色翻转恢复接管
 // - 关闭开关 → 深浅色翻转不再切
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
@@ -15,13 +15,22 @@ const PORT = 9233;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// mock 设置走 localStorage 持久化，profile 不清就会把上一次运行落的
+// 「开关开着 + 映射」带进本次，「默认关闭」断言永远翻车（与 schedule_check 同款防护）
+let PROFILE = join(OUT_DIR, "edge_auto_switch_profile");
+try {
+  rmSync(PROFILE, { recursive: true, force: true });
+} catch {
+  PROFILE = join(OUT_DIR, `edge_auto_switch_profile_${process.pid}`);
+}
+
 const edge = spawn(EDGE, [
   "--headless=new",
   "--disable-gpu",
   "--force-device-scale-factor=1",
   "--window-size=1200,800",
   `--remote-debugging-port=${PORT}`,
-  "--user-data-dir=" + join(OUT_DIR, "edge_auto_switch_profile"),
+  "--user-data-dir=" + PROFILE,
   "about:blank",
 ]);
 
@@ -174,6 +183,41 @@ try {
   await sleep(400);
   const activeAfterDisable = await evaluate(`__themeStore.getState().activeThemeId`);
   assert("关闭开关后翻转不再切", activeAfterDisable === "sys_firefly", String(activeAfterDisable));
+
+  // --- 8.5 启动竞态回归：settings 先就绪而主题列表还空时，首次评估不得被吞 ---
+  // 真机上 settings（单文件）几乎总是先于 themes（目录扫描）就绪。曾有缺陷：
+  // 空列表下 applyTheme 静默 no-op 却照常把 lastAppliedId 记上，列表就绪后的
+  // 评估被去重挡住，「启动后的首次评估」永远不生效。修复后：空列表退避不记账，
+  // 列表到位时的订阅回调会补上这次应用。
+  const savedThemes = await evaluate(`JSON.stringify(__themeStore.getState().themes)`);
+  await evaluate(`__themeStore.setState({ themes: [] })`);
+  await evaluate(
+    `__settingsStore.getState().patchSettings({ auto_switch_enabled: true })`,
+    true,
+  );
+  await sleep(400);
+  const idleWhileEmpty = await evaluate(`__themeStore.getState().activeThemeId`);
+  assert(
+    "列表未就绪时不抢跑也不记账",
+    idleWhileEmpty === "sys_firefly",
+    String(idleWhileEmpty),
+  );
+  await evaluate(
+    `__themeStore.setState({ themes: JSON.parse(${JSON.stringify(savedThemes)}) })`,
+  );
+  let appliedAfterList = false;
+  for (let i = 0; i < 40; i++) {
+    if (await evaluate(`__themeStore.getState().activeThemeId === "sys_windows_default"`)) {
+      appliedAfterList = true;
+      break;
+    }
+    await sleep(100);
+  }
+  assert(
+    "列表就绪后补上首次应用",
+    appliedAfterList,
+    String(await evaluate(`__themeStore.getState().activeThemeId`)),
+  );
 
   // --- 9. 运行期无 JS 异常 ---
   assert("运行期无 JS 异常", pageErrors.length === 0, `errors=${pageErrors.length}`);
