@@ -1272,6 +1272,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 - **排序口径**：使用中置顶（带徽标）→ 我的主题（名称序）→ 系统方案（名称序）——面板的任务是「切」，自己导入的主题是主要目标。过滤为纯函数 `lib/quick-switch.ts`（决策 49 口径，`npm test` 覆盖）。
 - **注册与开关**：Ctrl+K 进 `SHORTCUTS` 清单（设置 → 快捷键一览自动展示），受 `shortcuts_enabled` 开关管辖，与其它快捷键同权；开着再按是 toggle。
+- **按键分发**：`event.code` 优先、缺失时按 `event.key` 回退（纯函数 `lib/shortcut-code.ts`，`npm test` 覆盖）。注入式键盘（PowerShell SendKeys、屏幕键盘、部分辅助工具）只带 `key`、`code` 为空，只认 `code` 会让全部应用内快捷键在这类输入下集体失灵——2026-11-03 真机验证发现并修复。
 - **不做确认**：Enter 应用无二次确认——应用主题本身可逆（还原默认 / 换别的），与检查器「应用此主题」按钮同权限；失败由 toast 报，面板不背错误处理。
 - **验收边界**：`palette_check.mjs`（12/12，独立 profile——脚本末段关闭快捷键开关会持久化，共用固定 profile 会让下一轮从「已禁用」起步）；真机 `verify_ui_smoke.mjs` 用真实 Ctrl 按键拉起面板并 Esc 关闭，**不按 Enter**（会写真实注册表）。
 

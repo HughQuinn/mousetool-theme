@@ -5,6 +5,7 @@
  * 应用失焦时自然不触发。
  */
 import { pickAndImportZip } from "@/lib/import-zip";
+import { shortcutCodeOf } from "@/lib/shortcut-code";
 import { useQuickSwitchStore } from "@/stores/quickSwitchStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
@@ -42,7 +43,7 @@ export function initShortcuts(): () => void {
     const settings = useSettingsStore.getState().settings;
     if (settings && !settings.shortcuts_enabled) return;
 
-    switch (event.code) {
+    switch (shortcutCodeOf(event)) {
       case "Digit1":
         event.preventDefault();
         useThemeStore.getState().setCurrentPage("gallery");
