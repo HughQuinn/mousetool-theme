@@ -33,7 +33,7 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
   const restoring = Boolean(busy[actionBusyKey("restore", "default")]);
   const saving = Boolean(busy[actionBusyKey("save", "current")]);
 
-  // 三态标识（决策 24）：态翻转时重播一次入场淡入（决策 63），
+  // 三态标识（决策 24）：态翻转时重播一次入场淡入（决策 64），
   // 让「当前使用中 → 系统默认」这类切换读起来是内容变了，不是文字闪一下。
   // key 只含态不含主题 id——改名不该触发重播。
   const stateKey = activeTheme ? "active" : activeExternal ? "external" : "default";

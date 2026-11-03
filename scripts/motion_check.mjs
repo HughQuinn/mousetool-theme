@@ -439,7 +439,7 @@ try {
   );
   check("主题卡过渡用的是标准曲线", (controls.card?.easing ?? "").includes("cubic-bezier(0.2, 0, 0, 1)"), controls.card?.easing);
 
-  // ── 6. 状态徽标入场淡入（决策 63）──
+  // ── 6. 状态徽标入场淡入（决策 64）──
   const badge = JSON.parse(
     await evaluate(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -465,7 +465,7 @@ try {
   check("徽标动画是 enter-fade 且 180ms", badge.name === "enter-fade" && near(badge.duration / 1000, 0.18), `${badge.name} ${badge.duration}ms`);
   check("侧栏当前使用卡三态翻转重播入场", badge.rowAnimated === true);
 
-  // ── 7. 表格行 FLIP 让位（决策 64）──
+  // ── 7. 表格行 FLIP 让位（决策 65）──
   const mineFlip = JSON.parse(
     await evaluate(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -520,12 +520,14 @@ try {
     await evaluate(`(async () => {
       const el = document.querySelector('nav button');
       let minScale = 1;
+      let ripple = false;
       const t0 = performance.now();
       while (performance.now() - t0 < 240) {
         await new Promise((r) => requestAnimationFrame(r));
         minScale = Math.min(minScale, Number(getComputedStyle(el).scale) || 1);
+        ripple = ripple || Boolean(el.querySelector('[data-ripple]'));
       }
-      return JSON.stringify({ minScale });
+      return JSON.stringify({ minScale, ripple });
     })()`),
   );
   await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...navPoint, button: "left", clickCount: 1 });
@@ -534,19 +536,24 @@ try {
       const el = document.querySelector('nav button');
       let maxScale = 0;
       let endScale = 0;
+      let afterPeakDips = false;
       const t0 = performance.now();
-      while (performance.now() - t0 < 420) {
+      while (performance.now() - t0 < 600) {
         await new Promise((r) => requestAnimationFrame(r));
         const s = Number(getComputedStyle(el).scale) || 1;
+        if (maxScale > 1.01 && s < 0.999) afterPeakDips = true;
         maxScale = Math.max(maxScale, s);
         endScale = s;
       }
-      return JSON.stringify({ maxScale, endScale });
+      return JSON.stringify({ maxScale, endScale, afterPeakDips, rippleGone: !el.querySelector('[data-ripple]') });
     })()`),
   );
   check("按钮按下缩到 0.97", pressDown.minScale < 0.985, `minScale=${pressDown.minScale.toFixed(3)}`);
-  check("按钮释放过冲超过原尺寸后回弹", pressUp.maxScale > 1.0005, `maxScale=${pressUp.maxScale.toFixed(4)}`);
-  check("按钮回弹停在原尺寸", Math.abs(pressUp.endScale - 1) < 0.002, `endScale=${pressUp.endScale.toFixed(4)}`);
+  check("按下荡开水波（涟漪出现）", pressDown.ripple, String(pressDown.ripple));
+  check("涟漪在动画结束后移除", pressUp.rippleGone, String(pressUp.rippleGone));
+  check("按钮释放晃动过冲超过原尺寸", pressUp.maxScale > 1.01, `maxScale=${pressUp.maxScale.toFixed(4)}`);
+  check("水珠感：晃动越过原尺寸再下穿（衰减振荡）", pressUp.afterPeakDips, `afterPeakDips=${pressUp.afterPeakDips}`);
+  check("晃动停在原尺寸", Math.abs(pressUp.endScale - 1) < 0.002, `endScale=${pressUp.endScale.toFixed(4)}`);
 
   // 开关滑块：设置页采样 —— 320ms spring、切换越过终点再回位
   // 侧栏有「主导航」「设置导航」两个 nav（按页面切换内容），必须限定主导航
@@ -640,6 +647,14 @@ try {
       [...document.querySelectorAll('nav[aria-label="设置导航"] button')].find((b) => b.textContent.includes('返回'))?.click();
     }
   })()`);
+
+  // 涟漪与晃动都走 WAAPI：减少动态下按下不产生涟漪（缩放反馈仍由 CSS 提供）
+  await send("Emulation.setEmulatedMedia", { media: "", features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", ...navPoint, button: "left", clickCount: 1 });
+  const rippleReduced = await evaluate(`Boolean(document.querySelector('nav button [data-ripple]'))`);
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...navPoint, button: "left", clickCount: 1 });
+  await send("Emulation.setEmulatedMedia", { media: "", features: [] });
+  check("减少动态下按下不产生涟漪", rippleReduced === false, String(rippleReduced));
 
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
 

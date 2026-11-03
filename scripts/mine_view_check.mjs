@@ -245,7 +245,7 @@ try {
     JSON.stringify({ gappedRows, gapHinted }),
   );
 
-  // ---- 第三段：描述可编辑（决策 61，检查器头部） ----
+  // ---- 第三段：描述可编辑（决策 62，检查器头部） ----
   await goto("http://localhost:1420/");
   await evaluate(
     `globalThis.__themeStore.getState().selectTheme("9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11")`,

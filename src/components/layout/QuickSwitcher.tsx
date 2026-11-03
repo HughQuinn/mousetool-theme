@@ -9,7 +9,7 @@ import { useQuickSwitchStore } from "@/stores/quickSwitchStore";
 import { useThemeStore } from "@/stores/themeStore";
 
 /**
- * Ctrl+K 快速切换面板（决策 67）
+ * Ctrl+K 快速切换面板（决策 68）
  *
  * 应用内等价于托盘快速切换（决策 30）：输入即过滤全部主题，↑↓ 选择、
  * Enter 直接应用，应用的核心动作「挑一个 → 应用」从这里一步直达。

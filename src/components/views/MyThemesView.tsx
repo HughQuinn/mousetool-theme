@@ -88,7 +88,7 @@ export function MyThemesView() {
     () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds, applyCounts }),
     [themes, query, sort, filter, fileGaps, usedIds, applyCounts],
   );
-  // 行数或行序变化（删除 / 筛选 / 排序 / 导入）时，保留行滑动补位（决策 64）
+  // 行数或行序变化（删除 / 筛选 / 排序 / 导入）时，保留行滑动补位（决策 65）
   useFlipRows(tbodyRef, "[data-theme-row]", [rows]);
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
@@ -270,7 +270,7 @@ export function MyThemesView() {
                 >
                   {allSelected ? "取消全选" : "全选"}
                 </Button>
-                {/* 导出所选（决策 62）：清理前留底的工作流——勾选 → 先导出一份 → 再删除。
+                {/* 导出所选（决策 63）：清理前留底的工作流——勾选 → 先导出一份 → 再删除。
                     与「导出全部」共用 export:all 忙碌键与后端重操作锁 */}
                 <Button
                   size="sm"
@@ -480,7 +480,7 @@ export function MyThemesView() {
                         </span>
                       </span>
                       {isActive && (
-                        // 入场淡入（决策 63）：同图库卡，应用成功的瞬间不闪变
+                        // 入场淡入（决策 64）：同图库卡，应用成功的瞬间不闪变
                         <span className="enter-fade z-10 shrink-0">
                           <StatusBadge tone="success" dot>
                             使用中

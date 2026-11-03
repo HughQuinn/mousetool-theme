@@ -86,7 +86,7 @@
 7. 删改类命令必须按规范 UUID 校验（`validation::is_canonical_uuid`，要求 `to_string()` 与原文完全一致）——`theme_dir(id)` 是字符串拼接，传 `../` 能越出数据目录。
 8. 多来源必须部分成功：注册表读不到不能让用户主题一起消失，失败进 `warnings`。
 9. 新增依赖需单独决策并记入决策记录（现有能力为何不够 / 手写成本 / 安装包与供应链代价），默认不加；Toast/浮层用 `@base-ui/react` 自封装，不引 sonner / radix（决策 6/27）。
-10. 动效只写 `duration-(--motion-*)` + `ease-standard/ease-exit/ease-spring`，禁裸数字时长、禁 `transition-all`；按钮按压的两段曲线（按下跟手 fast、松开 spring 回弹）集中写在 App.css 的 `motion-press`——Tailwind 的统一时长类写不出按属性分曲线（决策 59）。**唯一例外 Toast 倒计时条**：时长=toast timeout（内联注入）、缓动必须 `linear` —— 它是剩余时间的读数，改缓动=读数失真（详见 motion.md §2）。
+10. 动效只写 `duration-(--motion-*)` + `ease-standard/ease-exit/ease-spring`，禁裸数字时长、禁 `transition-all`；按钮按压的两段曲线（按下跟手 fast、松开回弹）集中写在 App.css 的 `motion-press`——Tailwind 的统一时长类写不出按属性分曲线（决策 59）。**JS 例外仅二**：Toast 倒计时条（时长=toast timeout 内联注入、缓动必须 `linear`——它是剩余时间的读数，改缓动=读数失真）与按压水滴（涟漪/晃动走 WAAPI，`press-water.ts` 全局委托，凡 `button.motion-press` 覆盖）（详见 motion.md §2）。
 11. zustand selector **不能返回新对象**（`filter`/`map`/字面量）→ 无限重渲染白屏；派生数据用纯函数 + `useMemo`。
 12. 后台起 dev server 只用 `npm run dev:bg`，且**启动与验证写进同一条命令**；禁止 `npm run dev | head`（管道一关 EPIPE 直接杀死 vite）。
 13. 可滚动容器一律加 `scroll-thin`：6px、轨道透明、拇指**平时完全隐形**、指针进入容器才浮出（`::-webkit-scrollbar`）。**别用 `scrollbar-width: thin`**——Chromium 里它仍走经典样式（带箭头、常显），在 320px 面板里会被当成进度条；也别自绘轨道或改滚动手感。

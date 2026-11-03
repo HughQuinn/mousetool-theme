@@ -73,7 +73,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
   const cover = coverSlot(theme);
   const missingNames = missingSlotNames(theme, missingSlotsOf(fileGaps, theme.id));
 
-  // 右键菜单的「删除」请求（决策 65）：只应答自己这个主题，复用同一个确认框
+  // 右键菜单的「删除」请求（决策 66）：只应答自己这个主题，复用同一个确认框
   useEffect(() => {
     const onRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ id?: string }>).detail;
@@ -93,7 +93,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
 
   // 来源与导入时间合成一行放底部：原先四行 dl 会把 15 个槽位挤出可视区，
   // 逼用户滚动才能看全一套光标，而这些字面元数据在「我的主题」表格里本来就有。
-  // 描述不进脚注（决策 61）：它已可编辑、显示在头部，重复一遍没有信息量
+  // 描述不进脚注（决策 62）：它已可编辑、显示在头部，重复一遍没有信息量
   const footnote = [
     theme.is_built_in ? "系统方案（注册表）" : "导入的主题",
     theme.updated_at ? `导入于 ${theme.updated_at}` : null,
@@ -121,7 +121,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               <h2 className="flex min-w-0 items-center gap-1.5">
                 <ThemeNameField theme={theme} nameClassName="text-base font-medium" />
                 {isActive && (
-                  // 入场淡入（决策 63）：同图库卡
+                  // 入场淡入（决策 64）：同图库卡
                   <span className="enter-fade shrink-0">
                     <StatusBadge tone="success" dot>
                       使用中
@@ -134,7 +134,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
                 {` · ${stats.filled} / ${stats.total} 槽位`}
                 {stats.animated > 0 ? ` · ${stats.animated} 个动态` : ""}
               </p>
-              {/* 描述可编辑（决策 61）：紧跟统计行，编辑入口与名称同一套约定 */}
+              {/* 描述可编辑（决策 62）：紧跟统计行，编辑入口与名称同一套约定 */}
               <div className="mt-1 min-w-0">
                 <ThemeDescriptionField theme={theme} />
               </div>

@@ -38,7 +38,7 @@ export function GalleryView() {
   const { picking, pick } = useImportTheme();
   const pageRef = useRef<HTMLDivElement>(null);
 
-  // 方向键网格导航（决策 66）：←→ 移一张、↑↓ 移一行、Home/End 首尾，
+  // 方向键网格导航（决策 67）：←→ 移一张、↑↓ 移一行、Home/End 首尾，
   // 跨「系统方案 / 我的主题」两段连续漫游。Tab 语义不动（仍逐卡穿越），
   // 方向键是二维移动的增强；列数按第一行实测，不写死。
   const handleGridKeyDown = (event: React.KeyboardEvent) => {

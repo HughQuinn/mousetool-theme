@@ -456,7 +456,7 @@ export function mockExportTheme(_theme: CursorTheme, _destPath: string): Promise
 export const MOCK_DATA_DIR = "C:\\Users\\demo\\AppData\\Local\\CursorStudio";
 
 /** 浏览器里的批量导出模拟：导出「已导入的 mock 主题」，数量随内存数据走；
- * 传 themeIds（决策 62）只导清单内的主题 */
+ * 传 themeIds（决策 63）只导清单内的主题 */
 export function mockExportAllThemes(destDir: string, themeIds?: string[]) {
   const wanted = themeIds ? new Set(themeIds) : null;
   const mine = devThemes.filter(

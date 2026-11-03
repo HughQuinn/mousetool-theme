@@ -8,7 +8,7 @@ import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 /**
- * 主题描述 + 原地编辑（决策 61）
+ * 主题描述 + 原地编辑（决策 62）
  *
  * 只在检查器头部出现；与 ThemeNameField 共用同一套 Enter/Esc/失焦约定，
  * 走同一个 rename 命令（补丁语义：只动描述时名称原样回传）。

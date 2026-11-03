@@ -17,6 +17,7 @@ import { CloseAskDialog } from "@/components/layout/CloseAskDialog";
 import { SplashOverlay } from "@/components/layout/SplashOverlay";
 import { Toaster } from "@/components/ui/toaster";
 import { QuickSwitcher } from "@/components/layout/QuickSwitcher";
+import { installPressWater } from "@/components/ui/press-water";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
@@ -85,6 +86,10 @@ function App() {
   // 光标守护（「设置 → 通用」可配，默认关闭）：启动检查 + 聚焦发现外部改写后
   // 自动恢复上次使用的主题；不轮询，见 lib/cursor-guard.ts
   useEffect(() => initCursorGuard(), []);
+
+  // 按压水滴反馈（决策 60）：凡 motion-press 按钮按下荡开涟漪、松开水珠晃动；
+  // 全局委托一份（侧栏导航等 buttonVariants 原生按钮同样覆盖），见 ui/press-water.ts
+  useEffect(() => installPressWater(), []);
 
   // 自动备份（「设置 → 数据」可配，默认关闭）：启动就绪后、窗口聚焦节流后
   // 各触发一次，当日去重与过期清理在命令层；见 lib/auto-backup.ts（决策 32）

@@ -56,7 +56,7 @@ try {
     "使用中 / 系统默认 / 被系统设置修改 三选一",
   );
 
-  // 右键菜单（决策 65）：真实窗口里能弹出与关闭；**不点任何动作项**——
+  // 右键菜单（决策 66）：真实窗口里能弹出与关闭；**不点任何动作项**——
   // 应用会写真实注册表，冒烟只验证交互层活着
   const contextMenu = JSON.parse(
     await cdp.evaluate(`(async () => {
@@ -83,7 +83,7 @@ try {
     JSON.stringify(contextMenu),
   );
 
-  // 方向键导航（决策 66）：真实窗口里发真实按键（CDP Input 域），聚焦卡片移动
+  // 方向键导航（决策 67）：真实窗口里发真实按键（CDP Input 域），聚焦卡片移动
   const nav = await cdp.evaluate(
     `document.querySelector("[data-theme-card]")?.focus(),
      document.activeElement?.getAttribute("data-theme-card") ?? null`,
@@ -104,7 +104,7 @@ try {
     `${nav} → ${afterKey}`,
   );
 
-  // Ctrl+K 快速切换面板（决策 67）：真实按键拉起、输入框就位、Esc 关闭。
+  // Ctrl+K 快速切换面板（决策 68）：真实按键拉起、输入框就位、Esc 关闭。
   // **不按 Enter**——那会真的应用主题写注册表
   await cdp.send("Input.dispatchKeyEvent", {
     type: "rawKeyDown", key: "k", code: "KeyK", windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2,

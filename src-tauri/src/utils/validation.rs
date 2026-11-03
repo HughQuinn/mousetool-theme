@@ -282,7 +282,7 @@ pub fn validate_theme_name(raw: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// 描述校验（决策 61）：允许空串（= 清除描述），最多 200 字、禁控制字符
+/// 描述校验（决策 62）：允许空串（= 清除描述），最多 200 字、禁控制字符
 pub fn validate_theme_description(raw: &str) -> Result<String, String> {
     let description = raw.trim();
     if description.chars().count() > 200 {

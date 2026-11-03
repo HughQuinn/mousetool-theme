@@ -197,7 +197,7 @@ interface ThemeStore {
   /**
    * 批量导出「我的主题」到指定目录（决策 34）
    *
-   * `themeIds`（决策 62）：传清单只导选中的主题，undefined = 全部。
+   * `themeIds`（决策 63）：传清单只导选中的主题，undefined = 全部。
    * 返回结果供界面续接（打开目录等）；null = 没执行（重复点击或失败）。
    */
   exportAllThemes: (destDir: string, themeIds?: string[]) => Promise<ExportAllOutcome | null>;
@@ -621,7 +621,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     if (!theme) return;
 
     const name = newName.trim();
-    // 补丁语义（决策 61）：描述 undefined = 不动；值都没变就不发请求
+    // 补丁语义（决策 62）：描述 undefined = 不动；值都没变就不发请求
     if (!name) return;
     if (newDescription === undefined) {
       if (name === theme.name) return;

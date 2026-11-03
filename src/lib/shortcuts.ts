@@ -61,7 +61,7 @@ export function initShortcuts(): () => void {
         useThemeStore.getState().setCurrentPage("settings");
         break;
       case "KeyK":
-        // 快速切换面板（决策 67）：开着再按一次是关闭（toggle）
+        // 快速切换面板（决策 68）：开着再按一次是关闭（toggle）
         event.preventDefault();
         useQuickSwitchStore.getState().setOpen(!useQuickSwitchStore.getState().open);
         break;

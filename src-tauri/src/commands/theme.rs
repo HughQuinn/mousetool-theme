@@ -720,7 +720,7 @@ fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
     trash::move_into_trash(theme_id, &name, slot_count)
 }
 
-/// 重命名 / 改描述已导入的主题（决策 61）
+/// 重命名 / 改描述已导入的主题（决策 62）
 ///
 /// 只改 theme.json 里的显示名与描述，目录名仍是 UUID（改目录会影响正在使用的
 /// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
@@ -1048,7 +1048,7 @@ fn export_all_in(
         .into_iter()
         .filter(|theme| !theme.is_built_in)
         .collect();
-    // 决策 62：传了 ID 清单就只导清单内的主题（「导出所选」）；清单外的 ID
+    // 决策 63：传了 ID 清单就只导清单内的主题（「导出所选」）；清单外的 ID
     // 自然落空，不需要报错——前端传的就是眼前勾选行，界面上看得见几套导几套
     if let Some(ids) = wanted {
         let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
@@ -1761,7 +1761,7 @@ mod tests {
         let err = rename(&id, "a\nb", None).unwrap_err();
         assert!(err.contains("控制字符"), "实际：{err}");
 
-        // 描述校验（决策 61）：空串合法（= 清除）、超长与控制字符拒绝
+        // 描述校验（决策 62）：空串合法（= 清除）、超长与控制字符拒绝
         let err = rename(&id, "名字", Some(&"字".repeat(201))).unwrap_err();
         assert!(err.contains("200"), "实际：{err}");
 
@@ -1797,7 +1797,7 @@ mod tests {
         assert_eq!(saved.updated_at, "", "改名不应改动导入时间");
     }
 
-    /// 决策 61：描述编辑走同一命令，补丁语义（None 不动 / Some 替换 / 空串清除）
+    /// 决策 62：描述编辑走同一命令，补丁语义（None 不动 / Some 替换 / 空串清除）
     #[test]
     fn 改描述应落盘且不改名与导入时间() {
         let root = TempDir::new("rename-description");
@@ -1960,7 +1960,7 @@ mod tests {
         }
     }
 
-    /// 决策 62：「导出所选」传 ID 清单时只导清单内的主题；未知 ID 落空不报错
+    /// 决策 63：「导出所选」传 ID 清单时只导清单内的主题；未知 ID 落空不报错
     #[test]
     fn 批量导出传入_id_清单时只导选中的() {
         let root = TempDir::new("export-all-selected");

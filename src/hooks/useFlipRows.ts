@@ -1,7 +1,7 @@
 import { useEffect, type RefObject } from "react";
 
 /**
- * 表格行位置变化后的 FLIP 让位（决策 64）
+ * 表格行位置变化后的 FLIP 让位（决策 65）
  *
  * 删除 / 筛选 / 排序让行消失或挪位时，仍然存在的行从旧位置滑到新位置，
  * 而不是瞬移补位。与 toaster 的 useStackShift 同一套手法，但量位置用

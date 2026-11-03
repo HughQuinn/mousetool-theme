@@ -68,14 +68,15 @@
 | 57 | 关闭行为三态与关窗询问 | `close_behavior` 扩为 ask（每次询问，**新装默认**）/ tray / exit；ask 下 Rust 拦关窗发 `close-ask` 事件、前端弹询问框（缩到托盘 / 退出 / 取消 + 「不再询问」，勾选后本次选择落盘）；托盘在 ask 模式藏窗期间存在；命令数 41→43（`hide_window_to_tray` / `exit_app`） |
 | 58 | 启动开屏与主窗延迟显示 | 单窗口 CSS 遮罩（`SplashOverlay`）：数据就绪淡出、最短停留 800ms / 最长 5s 兜底、`loadError` 也放行；主窗 `visible: false` 起步，遮罩挂载发 `splash-ready` 事件经 `tray::show_window` 亮窗（**零新命令**）；ask 托盘判定加 `EVER_SHOWN`（启动期等待不算藏窗）；真机白屏 dev 冷启动 3.8s→50ms、release 951→42ms |
 | 59 | 交互动效弹性升级（按压回弹） | 用户拍板「网页手感」：新增 `--motion-spring`(320ms)/`--ease-spring`(过冲~10%) 档；Button 按下 scale 0.97 + 松开 spring 回弹（两段曲线集中 App.css `motion-press`）、Toggle 滑块 spring 位移（过冲 ~2px 回位）、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压不做；修订 motion.md 硬规则 ease 家族 +1 与 2026-10-21「不做回弹」口径；`motion_check` 33→43 项 |
-| 60 | AniPlayer 停表条件扩展到失焦 | 停表条件从「离屏 / 窗口不可见」扩为「离屏 / 窗口不可见 / **失焦**」：可见但没焦点的后台窗口里动画没人看，`visibilitychange` 管不到；判定走 blur/focus 事件、不用 `document.hasFocus()` 定初值（自动化环境恒 false，会让验收脚本动画集体停摆）；停表保留末帧，视觉无变化 |
-| 61 | 主题描述可编辑 | `rename_theme` 增加可选 `newDescription`（补丁语义：`None` 不动 / 空串清除 / 有值替换），描述 ≤200 字禁控制字符；检查器头部原地编辑（与重命名同一套 Enter/Esc/失焦约定），底部脚注不再重复描述；系统方案描述来自注册表、不提供编辑；`updated_at` 不动 |
-| 62 | 批量整理「导出所选」 | `export_all_themes` 增加可选 `themeIds`：传清单只导清单内的用户主题、未知 ID 落空不报错，省略 = 全部；「导出所选」长在整理模式工具条（删除所选旁），与「导出全部」共用命令、`export:all` 忙碌键、ops 锁与部分成功语义——清理前先留底的工作流，不加新命令（命令数保持 43） |
-| 63 | 状态徽标 / 状态卡入场过渡 | 「使用中」徽标（图库卡 / 表格行 / 检查器）与侧栏「当前使用」卡三态：出现或翻转时入场淡入 180ms（复用 `enter-fade`，key 重挂触发）；**退场保持瞬变**——徽标是内联标记不是浮层，退场动画要保留 DOM + pointer-events 处理，复杂度与收益不成比；动画断言进 `motion_check`（49 项中的徽标区），真机只跑 UI 冒烟（徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界） |
-| 64 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（49 项中的 FLIP 区）+ 真机 `verify_flip_shift.mjs` |
-| 65 | 主题卡 / 表格行右键菜单 | 图库卡与「我的主题」行右键出菜单：应用 / 导出 ZIP / 重命名（仅用户主题）/ 删除（仅用户主题，使用中禁用并说明；系统方案只有应用与导出）。**重命名与删除不直接执行**——先选中该主题再发 `mousetool:request-*` 事件，由检查器里已有的编辑框与确认框接手（确认与后果说明只有一份）；组件是 base-ui ContextMenu 自封装（`ui/context-menu.tsx`，浮层动效口径）；不做键盘入口（检查器已有完整键盘路径，右键菜单是鼠标快捷方式） |
-| 66 | 图库网格方向键导航 | 图库页 ←→ 移一张、↑↓ 移一行、Home/End 首尾，跨「系统方案 / 我的主题」两段连续漫游；**Tab 语义不动**（仍逐卡穿越，不做 roving tabindex）——方向键是二维移动的增强，不是替换；列数按第一行卡片实测（auto-fill 布局随窗宽变），不写死。断言进 `keyboard_nav_check.mjs`（14 项），真机冒烟用 CDP Input 域发真实按键验证 |
-| 67 | Ctrl+K 快速切换面板 | 应用内浮层：输入即过滤全部主题（我的主题在前名称序、系统方案在后、使用中置顶），↑↓ 高亮、Enter 直接应用、Esc 关；底部常驻「还原系统默认光标」动作行。快捷键注册进 `SHORTCUTS`（受 `shortcuts_enabled` 开关管辖）；候选过滤是纯函数 `lib/quick-switch.ts`（可单测）；面板是任务层浮层不进 PAGE_META/VIEWS；**应用失败只 toast、不在面板里确认**——面板只负责选 |
+| 60 | 按压水滴（涟漪 + 水珠晃动） | 用户要「水滴感」：涟漪从决策 59 的「不做」翻案——按下从点击点荡开涟漪（500ms 淡出，currentColor 全变体通用）、松开 scale 走衰减振荡（0.97→1.02→0.993→1.004→1，480ms）替代单次回弹；`press-water.ts` 全局委托（凡 `button.motion-press`，覆盖 buttonVariants 原生按钮），WAAPI 一次性动画、减少动态跳过；开关滑块/对勾维持单次回弹；`motion_check` 43→47 项 |
+| 61 | AniPlayer 停表条件扩展到失焦 | 停表条件从「离屏 / 窗口不可见」扩为「离屏 / 窗口不可见 / **失焦**」：可见但没焦点的后台窗口里动画没人看，`visibilitychange` 管不到；判定走 blur/focus 事件、不用 `document.hasFocus()` 定初值（自动化环境恒 false，会让验收脚本动画集体停摆）；停表保留末帧，视觉无变化 |
+| 62 | 主题描述可编辑 | `rename_theme` 增加可选 `newDescription`（补丁语义：`None` 不动 / 空串清除 / 有值替换），描述 ≤200 字禁控制字符；检查器头部原地编辑（与重命名同一套 Enter/Esc/失焦约定），底部脚注不再重复描述；系统方案描述来自注册表、不提供编辑；`updated_at` 不动 |
+| 63 | 批量整理「导出所选」 | `export_all_themes` 增加可选 `themeIds`：传清单只导清单内的用户主题、未知 ID 落空不报错，省略 = 全部；「导出所选」长在整理模式工具条（删除所选旁），与「导出全部」共用命令、`export:all` 忙碌键、ops 锁与部分成功语义——清理前先留底的工作流，不加新命令（命令数保持 43） |
+| 64 | 状态徽标 / 状态卡入场过渡 | 「使用中」徽标（图库卡 / 表格行 / 检查器）与侧栏「当前使用」卡三态：出现或翻转时入场淡入 180ms（复用 `enter-fade`，key 重挂触发）；**退场保持瞬变**——徽标是内联标记不是浮层，退场动画要保留 DOM + pointer-events 处理，复杂度与收益不成比；动画断言进 `motion_check`（53 项中的徽标区），真机只跑 UI 冒烟（徽标出现依赖注册表状态，真机脚本不碰注册表是既定边界） |
+| 65 | 表格行 FLIP 让位 | 「我的主题」行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，与 toaster 堆叠让位同一手法）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量，无需先 cancel）；减少动态下 JS 侧直接跳过（WAAPI 不受全局 CSS 压缩影响）；断言进 `motion_check`（53 项中的 FLIP 区）+ 真机 `verify_flip_shift.mjs` |
+| 66 | 主题卡 / 表格行右键菜单 | 图库卡与「我的主题」行右键出菜单：应用 / 导出 ZIP / 重命名（仅用户主题）/ 删除（仅用户主题，使用中禁用并说明；系统方案只有应用与导出）。**重命名与删除不直接执行**——先选中该主题再发 `mousetool:request-*` 事件，由检查器里已有的编辑框与确认框接手（确认与后果说明只有一份）；组件是 base-ui ContextMenu 自封装（`ui/context-menu.tsx`，浮层动效口径）；不做键盘入口（检查器已有完整键盘路径，右键菜单是鼠标快捷方式） |
+| 67 | 图库网格方向键导航 | 图库页 ←→ 移一张、↑↓ 移一行、Home/End 首尾，跨「系统方案 / 我的主题」两段连续漫游；**Tab 语义不动**（仍逐卡穿越，不做 roving tabindex）——方向键是二维移动的增强，不是替换；列数按第一行卡片实测（auto-fill 布局随窗宽变），不写死。断言进 `keyboard_nav_check.mjs`（14 项），真机冒烟用 CDP Input 域发真实按键验证 |
+| 68 | Ctrl+K 快速切换面板 | 应用内浮层：输入即过滤全部主题（我的主题在前名称序、系统方案在后、使用中置顶），↑↓ 高亮、Enter 直接应用、Esc 关；底部常驻「还原系统默认光标」动作行。快捷键注册进 `SHORTCUTS`（受 `shortcuts_enabled` 开关管辖）；候选过滤是纯函数 `lib/quick-switch.ts`（可单测）；面板是任务层浮层不进 PAGE_META/VIEWS；**应用失败只 toast、不在面板里确认**——面板只负责选 |
 
 ---
 
@@ -1248,7 +1249,22 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **验收**：`motion_check.mjs` 43/43——新增 10 项弹性断言（按钮过渡含 320ms spring 段 / 真实鼠标按下 0.970 / 释放过冲 1.0029 回 1 / 滑块 320ms spring + 过冲回位 / 对勾 check-pop + 过冲回位），dialog 区顺手把固定 sleep 换成轮询（检查器慢开时的假失败）；`npm run build` 通过；design_audit 无裸时长。真机 `scripts/real_machine/verify_spring_motion.mjs` 14/14（2026-11-03，真实 WebView2 + 隔离数据根，真实鼠标按下/释放采样，数据与 mock 逐项一致；证据见 `docs/real-machine-verify/决策59真机验证.md`）。
 - **环境坑（备查）**：`%TEMP%edge_headless_profile` 残留会让 motion_check 假失败（toast 不卸载、删除按钮轮询不到），删除该目录即恢复；诊断时用独立 profile 的脚本对照定位。
 
-## 决策 60：AniPlayer 停表条件扩展到失焦
+---
+
+## 决策 60：按压水滴——涟漪 + 水珠晃动
+
+**结论**（2026-11-03）：决策 59 落地后用户追加「想要有种水滴感的效果」，在按压反馈上再进一步——**涟漪**（决策 59 曾裁掉，本次翻案）与**水珠晃动**（松开后的多周期衰减振荡）两件套，只作用在 `motion-press` 按钮上，开关滑块/对勾维持单次回弹。
+
+- **涟漪**：pointerdown 从点击点荡开一圈圆波（`scale 0→1 + opacity 0.22→0`，500ms `ease-standard`，`finished` 后移除）。颜色取 `currentColor`：default 按钮白波、ghost/outline 前景色波，一套代码全变体通用。容器所需的 `relative + overflow-hidden` 并进 `motion-press` 工具类。
+- **水珠晃动**：pointerup 后 480ms 衰减振荡 keyframes（`scale 0.97→1.02→0.993→1.004→1`）替代 motion.md §4.4 的单次 spring 回弹——WAAPI 动画优先于 transition，播完 CSS 已稳定在 1，无缝衔接。
+- **全局委托而非逐组件挂载**：`installPressWater()`（App 挂一份）document 捕获 pointerdown，`closest('button.motion-press')` 命中才动。原因：侧栏导航等处是 `buttonVariants()` 类串配原生 `<button>`（要塞活动条等自定义结构），逐组件挂会漏——类名即行为标记，凡 `motion-press` 就有水滴，未来变体自动获得。
+- **性能与可访问性**：涟漪与晃动都是一次性 WAAPI 补间（与 Toast FLIP 同级，非常驻逐帧 JS）；`prefers-reduced-motion` 下 JS 侧直接跳过（缩放反馈仍由 CSS transition 提供，瞬时完成）；晃动用独立 `scale` 属性不碰 `transform`（不覆盖按下位移的 translate）；键盘激活不出水滴（没有坐标）。
+- **不做**：开关滑块/对勾的水珠晃动（开关要利落）；内容卡片（维持决策 59）。
+- **验收**：`motion_check.mjs` 47/47——新增 4 项（真实鼠标按下荡开涟漪、500ms 后移除、晃动过冲 >1.01 且峰值后下穿再回 1、减少动态下不产生涟漪）；`npm run build` 通过。真机 `verify_spring_motion.mjs` 18/18（2026-11-03，真实 WebView2 + 隔离数据根，晃动过冲 1.0194、涟漪 500ms 清理、减少动态不产涟漪；证据见 `docs/real-machine-verify/决策60真机验证.md`）。
+
+---
+
+## 决策 61：AniPlayer 停表条件扩展到失焦
 
 **结论**（2026-11-03）：`AniPlayer` 的停表条件从两个（离屏 / `document.hidden`）扩为三个（+ **宿主窗口失焦**）。应用窗口可见但没焦点时（用户切去别的应用干活），动画照跑纯属白烧 CPU——图库封面是常驻自动播放的，一个列表几十块画布同时在后台窗口里画；`visibilitychange` 只覆盖最小化，覆盖不了这种「可见但不活跃」。停表保留末帧，重新聚焦续播，视觉上无任何变化。
 
@@ -1258,7 +1274,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 61：主题描述可编辑
+## 决策 62：主题描述可编辑
 
 **结论**（2026-11-03）：`rename_theme` 增加可选参数 `newDescription`，**补丁语义**与 `update_settings` 同一口径——`None`（前端 `undefined`）= 描述不动；空串 = 清除描述；有值 = 整体替换（trim）。校验：≤200 字、禁控制字符，空串合法。命令名不改（避免动命令数与三方契约断言），「改名」语义扩为「改名称 + 描述」。
 
@@ -1269,7 +1285,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 62：批量整理「导出所选」
+## 决策 63：批量整理「导出所选」
 
 **结论**（2026-11-03）：`export_all_themes` 增加可选参数 `themeIds`（前端 `string[] | undefined` → Rust `Option<Vec<String>>`）。传清单 = 只导清单内的用户主题（「导出所选」）；省略或 `null` = 全部（「导出全部」原语义不变）。清单里不存在的 ID 静默落空、不点名报错——前端传的就是眼前勾选行，界面上看得见几套导几套，不存在"用户不知道哪个没导"的问题。
 
@@ -1280,7 +1296,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 63：状态徽标 / 状态卡入场过渡
+## 决策 64：状态徽标 / 状态卡入场过渡
 
 **结论**（2026-11-03）：凡「从无到有」的状态标记——三处「使用中」徽标（图库卡 / 「我的主题」行 / 检查器头部）与侧栏「当前使用」卡的三态行——出现或翻转时播一次 180ms 入场淡入（复用现成 `enter-fade` token，`key` 重挂触发，与检查器换选中项同一手法）。**退场保持瞬变**：徽标是内联状态标记，不是浮层；退场动画需要把元素在 DOM 里多留 160ms 并处理 `pointer-events`，对一个"消失即消失"的小标记是纯开销。
 
@@ -1290,7 +1306,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 64：表格行 FLIP 让位
+## 决策 65：表格行 FLIP 让位
 
 **结论**（2026-11-03）：「我的主题」的行数或行序变化（删除 / 批量删除 / 筛选 / 排序 / 导入）时，仍然存在的行从旧位置**滑动**到新位置（180ms、`ease-standard`），不再瞬移补位。实现是独立 hook `src/hooks/useFlipRows.ts`：`useLayoutEffect` 里量新位置、与旧快照求差、WAAPI 补 transform——与 Toast 堆叠让位（toaster 的 `useStackShift`）同一套 FLIP 手法。
 
@@ -1301,7 +1317,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 65：主题卡 / 表格行右键菜单
+## 决策 66：主题卡 / 表格行右键菜单
 
 **结论**（2026-11-03）：图库卡与「我的主题」表格行右键出菜单，四类动作与检查器同源：**应用此主题**（使用中不显示该项）、**导出 ZIP**、**重命名**（仅用户主题）、**删除…**（仅用户主题；使用中禁用并说明原因）。系统方案的菜单只有应用与导出。组件：`ui/context-menu.tsx`（base-ui ContextMenu 自封装，决策 6 口径内的既有依赖）+ `ThemeContextMenu.tsx`（业务封装，`as="tr"` 把触发器合并进表格行、不破坏 table 语义）。
 
@@ -1312,7 +1328,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 66：图库网格方向键导航
+## 决策 67：图库网格方向键导航
 
 **结论**（2026-11-03）：图库页支持方向键漫游——←→ 移一张、↑↓ 移一行（行宽 = 第一行卡片实测数，`auto-fill` 布局下列数随窗宽变，不能写死）、Home/End 跳首尾、两端不越界；「系统方案 / 我的主题」两段按 DOM 顺序拼成一个大漫游序，段末 → 右落到下一段首。实现在 `GalleryView` 的容器 `onKeyDown`（合成事件冒泡，只有焦点已在页内时才触发）。
 
@@ -1322,7 +1338,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 67：Ctrl+K 快速切换面板
+## 决策 68：Ctrl+K 快速切换面板
 
 **结论**（2026-11-03）：任何页面按 Ctrl+K 拉起快速切换面板（再按一次或 Esc 关闭）：输入即过滤全部主题（系统方案 + 我的主题），↑↓ 移动高亮、Enter **直接应用**并关面板；底部常驻「还原系统默认光标」动作行。这是托盘快速切换（决策 30）的应用内等价物——「挑一个 → 应用」的核心动作从四五步缩到两步。
 

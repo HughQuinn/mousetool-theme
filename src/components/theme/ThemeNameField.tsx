@@ -40,7 +40,7 @@ export function ThemeNameField({ theme, nameClassName, compact = false }: ThemeN
     setEditing(false);
   }, [theme.id, theme.name]);
 
-  // 右键菜单的「重命名」请求（决策 65）：只应答自己这个主题
+  // 右键菜单的「重命名」请求（决策 66）：只应答自己这个主题
   useEffect(() => {
     const onRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ id?: string }>).detail;

@@ -4,7 +4,7 @@ import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu
 import { cn } from "@/lib/utils";
 
 /**
- * 右键菜单（决策 65）。base-ui 的 ContextMenu 自封装，风格与 Dialog 同源：
+ * 右键菜单（决策 66）。base-ui 的 ContextMenu 自封装，风格与 Dialog 同源：
  * popover 底 + ring 描边、入场 slow 档缩放淡入、退场 exit 档（浮层口径）。
  * 定位、Esc / 点外关闭、方向键漫游、焦点圈定都交给 base-ui。
  *

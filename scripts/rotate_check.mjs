@@ -192,8 +192,9 @@ try {
   const third = await evaluate(`globalThis.__themeStore.getState().activeThemeId`);
   check("再触发一轮循环推进到下一套", third !== secondActive, `${secondActive} -> ${third}`);
 
-  // 收尾：关掉开关，别让 mock 的 localStorage 状态泄漏到其它断言
-  await patch({ rotate_enabled: false });
+  // 收尾：关掉开关并把间隔复位——mock 设置走 localStorage 持久化，
+  // 不复位会让下次跑的「默认 60 分钟」断言读到本次改的值（不幂等）
+  await patch({ rotate_enabled: false, rotate_interval_minutes: 60 });
 
   const errors = pageErrors.length;
   check("运行期无 JS 异常", errors === 0, `${errors} 条`);

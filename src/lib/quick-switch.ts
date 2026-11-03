@@ -1,6 +1,6 @@
 import type { CursorTheme } from "@/types/theme";
 
-/** Ctrl+K 面板里的一行候选（决策 67） */
+/** Ctrl+K 面板里的一行候选（决策 68） */
 export interface QuickSwitchItem {
   id: string;
   name: string;
@@ -11,7 +11,7 @@ export interface QuickSwitchItem {
 }
 
 /**
- * 快速切换面板的候选清单（决策 67，纯函数可单测）
+ * 快速切换面板的候选清单（决策 68，纯函数可单测）
  *
  * 过滤 = 名称包含关键词（大小写不敏感，空词全量）；
  * 排序 = 使用中第一，然后我的主题（名称序）、系统方案（名称序）——

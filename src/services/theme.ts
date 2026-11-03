@@ -203,7 +203,7 @@ export function emptyTrash(): Promise<EmptyTrashOutcome> {
 }
 
 /**
- * 对应 Rust 命令 `rename_theme`：只改显示名与描述（决策 61），返回更新后的主题
+ * 对应 Rust 命令 `rename_theme`：只改显示名与描述（决策 62），返回更新后的主题
  *
  * `newDescription` 与 Rust 的 `Option<String>` 对齐：`undefined` = 不动描述，
  * 字符串（含空串）= 整体替换。浏览器环境直接本地改名，让开发时也能走通完整交互
@@ -279,7 +279,7 @@ export async function exportAllThemes(
     });
   }
   try {
-    // themeIds（决策 62）：传清单只导选中的主题；undefined = 全部「我的主题」
+    // themeIds（决策 63）：传清单只导选中的主题；undefined = 全部「我的主题」
     return await invoke<ExportAllOutcome>("export_all_themes", {
       destDir,
       themeIds: themeIds ?? null,

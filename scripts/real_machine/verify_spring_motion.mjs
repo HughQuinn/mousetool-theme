@@ -80,12 +80,14 @@ try {
     await cdp.evaluate(`(async () => {
       const el = document.querySelector('nav[aria-label="主导航"] button');
       let minScale = 1;
+      let ripple = false;
       const t0 = performance.now();
       while (performance.now() - t0 < 240) {
         await new Promise((r) => requestAnimationFrame(r));
         minScale = Math.min(minScale, Number(getComputedStyle(el).scale) || 1);
+        ripple = ripple || Boolean(el.querySelector('[data-ripple]'));
       }
-      return JSON.stringify({ minScale });
+      return JSON.stringify({ minScale, ripple });
     })()`),
   );
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...navPoint, button: "left", clickCount: 1 });
@@ -94,19 +96,24 @@ try {
       const el = document.querySelector('nav[aria-label="主导航"] button');
       let maxScale = 0;
       let endScale = 0;
+      let afterPeakDips = false;
       const t0 = performance.now();
-      while (performance.now() - t0 < 420) {
+      while (performance.now() - t0 < 600) {
         await new Promise((r) => requestAnimationFrame(r));
         const s = Number(getComputedStyle(el).scale) || 1;
+        if (maxScale > 1.01 && s < 0.999) afterPeakDips = true;
         maxScale = Math.max(maxScale, s);
         endScale = s;
       }
-      return JSON.stringify({ maxScale, endScale });
+      return JSON.stringify({ maxScale, endScale, afterPeakDips, rippleGone: !el.querySelector('[data-ripple]') });
     })()`),
   );
   checker.check("真实鼠标按下按钮缩到 0.97", pressDown.minScale < 0.985, `minScale=${pressDown.minScale.toFixed(3)}`);
-  checker.check("松开过冲超过原尺寸（回弹）", pressUp.maxScale > 1.0005, `maxScale=${pressUp.maxScale.toFixed(4)}`);
-  checker.check("回弹停在原尺寸", Math.abs(pressUp.endScale - 1) < 0.002, `endScale=${pressUp.endScale.toFixed(4)}`);
+  checker.check("按下荡开水波（涟漪出现）", pressDown.ripple, String(pressDown.ripple));
+  checker.check("涟漪在动画结束后移除", pressUp.rippleGone, String(pressUp.rippleGone));
+  checker.check("松开晃动过冲超过原尺寸", pressUp.maxScale > 1.01, `maxScale=${pressUp.maxScale.toFixed(4)}`);
+  checker.check("水珠感：晃动越过原尺寸再下穿（衰减振荡）", pressUp.afterPeakDips, `afterPeakDips=${pressUp.afterPeakDips}`);
+  checker.check("晃动停在原尺寸", Math.abs(pressUp.endScale - 1) < 0.002, `endScale=${pressUp.endScale.toFixed(4)}`);
 
   // ── 开关滑块：设置页，真实点击 + 过冲采样 ──
   // 侧栏双 nav 按页切换（设置页下主导航不在 DOM）；导航按钮带数量徽章只能 includes
@@ -188,8 +195,12 @@ try {
       `getComputedStyle(document.querySelector('nav[aria-label="主导航"] button') ?? document.body).transitionDuration`,
     ),
   );
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...navPoint, button: "left", clickCount: 1 });
+  const rippleReduced = await cdp.evaluate(`Boolean(document.querySelector('nav[aria-label="主导航"] button [data-ripple]'))`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...navPoint, button: "left", clickCount: 1 });
   await cdp.send("Emulation.setEmulatedMedia", { media: "", features: [] });
   checker.check("减少动态下时长压到 0.01ms", reducedDuration > 0 && reducedDuration < 0.001, `${reducedDuration}s`);
+  checker.check("减少动态下按下不产生涟漪", rippleReduced === false, String(rippleReduced));
 
   checker.check("运行期无 JS 异常", cdp.pageErrors.length === 0, cdp.pageErrors.join(" | "));
 
