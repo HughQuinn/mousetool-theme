@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   FolderDown,
@@ -19,12 +19,15 @@ import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { SlotMeter } from "@/components/theme/SlotMeter";
 import { BatchDeleteDialog } from "@/components/theme/BatchDeleteDialog";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
+import { ThemeCardMenu } from "@/components/theme/ThemeContextMenu";
 import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
+import { useFlipRows } from "@/hooks/useFlipRows";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
 import {
   applyCountOf,
+  mineBatchSelection,
   mineThemes,
   missingSlotsOf,
   type MineFilter,
@@ -73,6 +76,8 @@ export function MyThemesView() {
   const [sort, setSort] = useState<MineSort>("newest");
   const [filter, setFilter] = useState<MineFilter>("all");
 
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
+
   // 「从未使用」= 最近使用记录里没出现过的主题 ID
   const usedIds = useMemo(
     () => new Set(recent.map((entry) => entry.theme_id)),
@@ -83,23 +88,19 @@ export function MyThemesView() {
     () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds, applyCounts }),
     [themes, query, sort, filter, fileGaps, usedIds, applyCounts],
   );
+  // 行数或行序变化（删除 / 筛选 / 排序 / 导入）时，保留行滑动补位（决策 65）
+  useFlipRows(tbodyRef, "[data-theme-row]", [rows]);
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
     [themes],
   );
   const batchDeleting = Boolean(busy[BATCH_DELETE_BUSY_KEY]);
-  // 使用中的主题可以看、可以选进检查器，但不能进入批量删除
-  const deletableRows = useMemo(
-    () => rows.filter((theme) => theme.id !== activeThemeId),
-    [rows, activeThemeId],
-  );
-  const selectedThemes = useMemo(
-    () => rows.filter((theme) => selectedIds.has(theme.id) && theme.id !== activeThemeId),
-    [rows, selectedIds, activeThemeId],
+  // 整理模式的勾选派生（决策 43/62 口径集中在 lib/themes.mineBatchSelection，可单测）
+  const { deletableRows, selectedThemes, allSelected, someSelected } = useMemo(
+    () => mineBatchSelection(rows, activeThemeId, selectedIds),
+    [rows, activeThemeId, selectedIds],
   );
   const selectedCount = selectedThemes.length;
-  const allSelected = deletableRows.length > 0 && selectedCount === deletableRows.length;
-  const someSelected = selectedCount > 0 && !allSelected;
 
   // 删除范围永远与眼前列表一致：换搜索词就清空勾选，避免删掉被过滤掉的行
   useEffect(() => {
@@ -269,6 +270,19 @@ export function MyThemesView() {
                 >
                   {allSelected ? "取消全选" : "全选"}
                 </Button>
+                {/* 导出所选（决策 63）：清理前留底的工作流——勾选 → 先导出一份 → 再删除。
+                    与「导出全部」共用 export:all 忙碌键与后端重操作锁 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-batch-export
+                  title="把勾选的主题导出为 ZIP 到所选文件夹"
+                  onClick={() => void pickAndExportAll(selectedThemes.map((theme) => theme.id))}
+                  disabled={selectedCount === 0 || batchDeleting || exportingAll || pickingAll}
+                >
+                  <FolderOutput data-icon="inline-start" />
+                  {exportingAll ? "导出中…" : pickingAll ? "选择中…" : "导出所选"}
+                </Button>
                 <Button
                   size="sm"
                   variant="destructive"
@@ -390,7 +404,7 @@ export function MyThemesView() {
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={tbodyRef}>
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
@@ -406,14 +420,15 @@ export function MyThemesView() {
               : ["—", undefined];
 
             return (
-              <tr
-                key={theme.id}
-                data-theme-row={theme.id}
-                className={cn(
-                  "border-b border-border/60 transition-[background-color] duration-(--motion-fast) ease-standard",
-                  selected ? "bg-accent" : "hover:bg-muted/50",
-                )}
-              >
+              <ThemeCardMenu key={theme.id} theme={theme} as="tr">
+                <tr
+                  data-theme-row={theme.id}
+                  data-flip-key={theme.id}
+                  className={cn(
+                    "border-b border-border/60 transition-[background-color] duration-(--motion-fast) ease-standard",
+                    selected ? "bg-accent" : "hover:bg-muted/50",
+                  )}
+                >
                 <td className="relative px-3 py-2.5">
                   {/* 选中条用整行高的 2px 竖线：accent 底色只有 3% 明度差，
                       单靠底色在深色模式下几乎看不出选中 */}
@@ -465,7 +480,8 @@ export function MyThemesView() {
                         </span>
                       </span>
                       {isActive && (
-                        <span className="z-10 shrink-0">
+                        // 入场淡入（决策 64）：同图库卡，应用成功的瞬间不闪变
+                        <span className="enter-fade z-10 shrink-0">
                           <StatusBadge tone="success" dot>
                             使用中
                           </StatusBadge>
@@ -562,6 +578,7 @@ export function MyThemesView() {
                   </span>
                 </td>
               </tr>
+              </ThemeCardMenu>
             );
           })}
         </tbody>

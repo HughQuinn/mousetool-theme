@@ -720,29 +720,41 @@ fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
     trash::move_into_trash(theme_id, &name, slot_count)
 }
 
-/// 重命名已导入的主题
+/// 重命名 / 改描述已导入的主题（决策 62）
 ///
-/// 只改 theme.json 里的显示名，目录名仍是 UUID（改目录会影响正在使用的
+/// 只改 theme.json 里的显示名与描述，目录名仍是 UUID（改目录会影响正在使用的
 /// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
+/// `new_description` 是补丁语义：`None` = 描述不动，`Some` = 整体替换（空串清除）。
 #[tauri::command]
 pub async fn rename_theme(
     app: AppHandle,
     theme_id: String,
     new_name: String,
+    new_description: Option<String>,
 ) -> Result<CursorTheme, String> {
-    let renamed = tauri::async_runtime::spawn_blocking(move || rename(&theme_id, &new_name))
-        .await
-        .map_err(|err| format!("改名任务异常退出（{err}）"))?;
+    let renamed = tauri::async_runtime::spawn_blocking(move || {
+        rename(&theme_id, &new_name, new_description.as_deref())
+    })
+    .await
+    .map_err(|err| format!("改名任务异常退出（{err}）"))?;
     // 菜单标签取主题的当前名字，改名后托盘不能还叫旧名（决策 30）
     tray::refresh(&app);
     renamed
 }
 
-fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
+fn rename(
+    theme_id: &str,
+    new_name: &str,
+    new_description: Option<&str>,
+) -> Result<CursorTheme, String> {
     if !validation::is_canonical_uuid(theme_id) {
         return Err("非法的主题 ID".to_string());
     }
     let name = validation::validate_theme_name(new_name)?;
+    let description = match new_description {
+        Some(raw) => Some(validation::validate_theme_description(raw)?),
+        None => None,
+    };
 
     let theme_dir = paths::theme_dir(theme_id)?;
     let json_path = theme_dir.join("theme.json");
@@ -759,6 +771,9 @@ fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
     }
 
     theme.name = name;
+    if let Some(description) = description {
+        theme.description = description;
+    }
 
     // 顺手把旧绝对路径改写成相对路径；返回给前端的仍是绝对路径
     theme_paths::write_theme_json(&theme_dir, &theme)
@@ -1025,6 +1040,7 @@ fn ensure_not_managed_dir(dest: &Path) -> Result<(), String> {
 
 fn export_all_in(
     dest_dir: &Path,
+    wanted: Option<&[String]>,
     progress: &mut dyn FnMut(usize, usize, &str),
 ) -> Result<ExportAllOutcome, String> {
     let (user_themes, warnings) = importer::read_user_themes();
@@ -1032,6 +1048,12 @@ fn export_all_in(
         .into_iter()
         .filter(|theme| !theme.is_built_in)
         .collect();
+    // 决策 63：传了 ID 清单就只导清单内的主题（「导出所选」）；清单外的 ID
+    // 自然落空，不需要报错——前端传的就是眼前勾选行，界面上看得见几套导几套
+    if let Some(ids) = wanted {
+        let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        themes.retain(|theme| wanted.contains(theme.id.as_str()));
+    }
     // 按名字排序：批量导出的顺序要稳定，与界面上「我的主题」的浏览顺序呼应
     themes.sort_by(|a, b| {
         a.name
@@ -1086,6 +1108,7 @@ fn export_all_in(
 pub async fn export_all_themes(
     app: AppHandle,
     dest_dir: String,
+    theme_ids: Option<Vec<String>>,
 ) -> Result<ExportAllOutcome, String> {
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1101,7 +1124,7 @@ pub async fn export_all_themes(
         }
         ensure_not_managed_dir(&dest)?;
         let emitter = emitter.clone();
-        export_all_in(&dest, &mut |current, total, name| {
+        export_all_in(&dest, theme_ids.as_deref(), &mut |current, total, name| {
             let _ = emitter.emit(
                 "export-all-progress",
                 progress::TaskProgress::new("export", current, total, name.to_string()),
@@ -1719,7 +1742,7 @@ mod tests {
             let err = delete(bad).unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 应被拒绝，实际：{err}");
 
-            let err = rename(bad, "x").unwrap_err();
+            let err = rename(bad, "x", None).unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 改名也应被拒绝，实际：{err}");
         }
     }
@@ -1729,13 +1752,20 @@ mod tests {
     fn 改名的名称校验() {
         let id = Uuid::new_v4().to_string();
 
-        let err = rename(&id, "   ").unwrap_err();
+        let err = rename(&id, "   ", None).unwrap_err();
         assert!(err.contains("不能为空"), "实际：{err}");
 
-        let err = rename(&id, &"字".repeat(41)).unwrap_err();
+        let err = rename(&id, &"字".repeat(41), None).unwrap_err();
         assert!(err.contains("40"), "实际：{err}");
 
-        let err = rename(&id, "a\nb").unwrap_err();
+        let err = rename(&id, "a\nb", None).unwrap_err();
+        assert!(err.contains("控制字符"), "实际：{err}");
+
+        // 描述校验（决策 62）：空串合法（= 清除）、超长与控制字符拒绝
+        let err = rename(&id, "名字", Some(&"字".repeat(201))).unwrap_err();
+        assert!(err.contains("200"), "实际：{err}");
+
+        let err = rename(&id, "名字", Some("a\nb")).unwrap_err();
         assert!(err.contains("控制字符"), "实际：{err}");
     }
 
@@ -1754,7 +1784,7 @@ mod tests {
         )
         .expect("写入初始 theme.json");
 
-        let outcome = rename(&id, "  新名字  ");
+        let outcome = rename(&id, "  新名字  ", None);
 
         let saved: CursorTheme = serde_json::from_str(
             &fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json"),
@@ -1765,6 +1795,46 @@ mod tests {
         assert_eq!(renamed.name, "新名字", "首尾空格应被去掉");
         assert_eq!(saved.name, "新名字", "改名结果必须落盘");
         assert_eq!(saved.updated_at, "", "改名不应改动导入时间");
+    }
+
+    /// 决策 62：描述编辑走同一命令，补丁语义（None 不动 / Some 替换 / 空串清除）
+    #[test]
+    fn 改描述应落盘且不改名与导入时间() {
+        let root = TempDir::new("rename-description");
+        let _guard = root.isolate_paths();
+
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
+        paths::ensure_dir(&dir).expect("建临时主题目录");
+        let mut theme = fake_theme(&id);
+        theme.description = "旧描述".to_string();
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .expect("写入初始 theme.json");
+
+        // Some = 整体替换，trim；名字与导入时间不动
+        let renamed = rename(&id, &theme.name, Some("  新描述  "))
+            .expect("改描述应成功");
+        assert_eq!(renamed.description, "新描述", "描述应被替换并去首尾空格");
+        assert_eq!(renamed.name, theme.name, "只改描述时名称不应变");
+        assert_eq!(renamed.updated_at, "", "改描述不应改动导入时间");
+
+        // None = 补丁语义，描述保持原值
+        let untouched = rename(&id, &theme.name, None).expect("不改描述应成功");
+        assert_eq!(untouched.description, "新描述", "None 不应动描述");
+
+        // 空串 = 清除描述
+        let cleared = rename(&id, &theme.name, Some("")).expect("清除描述应成功");
+        assert_eq!(cleared.description, "", "空串应清除描述");
+
+        // 落盘核验：磁盘上的 theme.json 与返回值一致
+        let saved: CursorTheme = serde_json::from_str(
+            &fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json"),
+        )
+        .expect("解析 theme.json");
+        assert_eq!(saved.description, "", "清除结果必须落盘");
     }
 
     /// 导出必须形成闭环：文件名按槽位重命名，再导入能还原成同一个槽位
@@ -1866,7 +1936,7 @@ mod tests {
         let (_b, _) = seed_exportable_theme("夜色", &[("Arrow", "b.cur", fixture_cur())]);
         let (_c, _) = seed_exportable_theme("晨光", &[("Arrow", "c.cur", fixture_cur())]);
 
-        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
         assert_eq!(outcome.exported.len(), 3, "三套全成功：{:?}", outcome.failed);
         assert!(outcome.failed.is_empty());
         assert!(outcome.warnings.is_empty());
@@ -1888,6 +1958,40 @@ mod tests {
             assert!(item.bytes > 0, "{} 要报出体积", item.file_name);
             assert_eq!(item.file_count, 1);
         }
+    }
+
+    /// 决策 63：「导出所选」传 ID 清单时只导清单内的主题；未知 ID 落空不报错
+    #[test]
+    fn 批量导出传入_id_清单时只导选中的() {
+        let root = TempDir::new("export-all-selected");
+        let _guard = root.isolate_paths();
+        let dest = root.join("导出目录");
+        fs::create_dir_all(&dest).expect("建导出目录");
+
+        let (a, _) = seed_exportable_theme("夜色", &[("Arrow", "a.cur", fixture_cur())]);
+        let (_b, _) = seed_exportable_theme("晨光", &[("Arrow", "b.cur", fixture_cur())]);
+        let (c, _) = seed_exportable_theme("暮色", &[("Arrow", "c.cur", fixture_cur())]);
+
+        let outcome = export_all_in(&dest, Some(&[a.id.clone(), c.id.clone()]), &mut |_, _, _| {})
+            .expect("导出所选整体不失败");
+        let mut names: Vec<&str> = outcome
+            .exported
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["夜色", "暮色"], "只导清单内的两套：{:?}", outcome.exported);
+        assert!(outcome.failed.is_empty());
+        assert!(!dest.join("晨光.zip").is_file(), "清单外的主题不应落盘");
+
+        // 清单里全是不存在的 ID：导出 0 套而不报错（不存在的主题无需点名）
+        let empty = export_all_in(&dest, Some(&[Uuid::new_v4().to_string()]), &mut |_, _, _| {})
+            .expect("未知 ID 不该报错");
+        assert!(empty.exported.is_empty() && empty.failed.is_empty());
+
+        // None 保持原语义：全部导出
+        let all = export_all_in(&dest, None, &mut |_, _, _| {}).expect("全量导出不失败");
+        assert_eq!(all.exported.len(), 3, "三套全成功：{:?}", all.failed);
     }
 
     /// 部分成功：文件缺口的那套进 failed，好主题照常落盘；管理目录拒绝导出
@@ -1916,7 +2020,7 @@ mod tests {
 
         let dest = root.join("out");
         fs::create_dir_all(&dest).expect("建导出目录");
-        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        let outcome = export_all_in(&dest, None, &mut |_, _, _| {}).expect("批量导出整体不失败");
         assert_eq!(outcome.exported.len(), 1, "好主题照常落盘");
         assert_eq!(outcome.exported[0].theme_id, good.id);
         assert_eq!(outcome.failed.len(), 1, "文件缺口的那套进 failed");

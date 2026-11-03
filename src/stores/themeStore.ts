@@ -192,14 +192,15 @@ interface ThemeStore {
     entry: TrashEntry,
     options?: { asCopy?: boolean },
   ) => Promise<boolean>;
-  renameTheme: (id: string, newName: string) => Promise<void>;
+  renameTheme: (id: string, newName: string, newDescription?: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
   /**
    * 批量导出「我的主题」到指定目录（决策 34）
    *
+   * `themeIds`（决策 63）：传清单只导选中的主题，undefined = 全部。
    * 返回结果供界面续接（打开目录等）；null = 没执行（重复点击或失败）。
    */
-  exportAllThemes: (destDir: string) => Promise<ExportAllOutcome | null>;
+  exportAllThemes: (destDir: string, themeIds?: string[]) => Promise<ExportAllOutcome | null>;
   /** 清空最近使用记录；返回清掉的条数，null = 没执行（重复点击或失败） */
   clearHistory: () => Promise<number | null>;
   /** 读一次数据目录路径（幂等，拿到就不再请求） */
@@ -615,12 +616,18 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  renameTheme: async (id, newName) => {
+  renameTheme: async (id, newName, newDescription) => {
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
 
     const name = newName.trim();
-    if (!name || name === theme.name) return;
+    // 补丁语义（决策 62）：描述 undefined = 不动；值都没变就不发请求
+    if (!name) return;
+    if (newDescription === undefined) {
+      if (name === theme.name) return;
+    } else if (name === theme.name && newDescription.trim() === theme.description) {
+      return;
+    }
 
     if (theme.is_built_in) {
       toast.error("系统自带方案不能改名");
@@ -631,14 +638,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     if (get().busy[key]) return;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
-      const updated = await apiRenameTheme(theme, name);
+      const updated = await apiRenameTheme(theme, name, newDescription);
       set((state) => ({
         themes: state.themes.map((t) => (t.id === id ? updated : t)),
       }));
       // 正在使用的主题改名后，注册表里的 SchemeName 还是旧名，需重新应用才同步
       const hint =
         get().activeThemeId === id ? "系统设置里的方案名会在下次应用时更新" : undefined;
-      toast.success(`已改名为「${updated.name}」`, hint);
+      toast.success(`已更新「${updated.name}」`, hint);
     } catch (err) {
       console.error("改名失败：", err);
       toast.error("改名失败", readableError(err));
@@ -676,14 +683,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       searchQuery: "",
     })),
 
-  exportAllThemes: async (destDir) => {
+  exportAllThemes: async (destDir, themeIds) => {
     const key = actionBusyKey("export", "all");
     if (get().busy[key]) return null;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true), exportAllProgress: null }));
     try {
       const outcome = await apiExportAllThemes(destDir, (progress) => {
         if (get().busy[key]) set({ exportAllProgress: progress });
-      });
+      }, themeIds);
       const parts = [`${outcome.exported.length} 套主题`];
       if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} 套失败`);
       if (outcome.warnings.length > 0) parts.push(`${outcome.warnings.length} 条提示`);

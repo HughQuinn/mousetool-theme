@@ -16,24 +16,27 @@ export function useExportAllThemes() {
   const busy = useThemeStore((s) => s.busy);
   const [picking, setPicking] = useState(false);
 
-  const pickAndExportAll = useCallback(async () => {
-    if (picking || busy[actionBusyKey("export", "all")]) return;
-    if (!inTauri) {
-      // 浏览器（开发 / 验收）里没有系统文件夹选择，直接走 mock 数据流
-      await exportAllThemes("");
-      return;
-    }
-    setPicking(true);
-    try {
-      const dest = await open({ directory: true, multiple: false, title: "选择导出位置" });
-      if (typeof dest === "string") await exportAllThemes(dest);
-    } catch (err) {
-      console.error("选择导出目录失败：", err);
-      toast.error("无法选择导出位置", "请重试，或检查目标文件夹权限");
-    } finally {
-      setPicking(false);
-    }
-  }, [picking, busy, exportAllThemes]);
+  const pickAndExportAll = useCallback(
+    async (themeIds?: string[]) => {
+      if (picking || busy[actionBusyKey("export", "all")]) return;
+      if (!inTauri) {
+        // 浏览器（开发 / 验收）里没有系统文件夹选择，直接走 mock 数据流
+        await exportAllThemes("", themeIds);
+        return;
+      }
+      setPicking(true);
+      try {
+        const dest = await open({ directory: true, multiple: false, title: "选择导出位置" });
+        if (typeof dest === "string") await exportAllThemes(dest, themeIds);
+      } catch (err) {
+        console.error("选择导出目录失败：", err);
+        toast.error("无法选择导出位置", "请重试，或检查目标文件夹权限");
+      } finally {
+        setPicking(false);
+      }
+    },
+    [picking, busy, exportAllThemes],
+  );
 
   return {
     picking,

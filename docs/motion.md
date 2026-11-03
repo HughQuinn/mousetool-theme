@@ -72,6 +72,10 @@
 | **侧栏导航** | — | — | 复用 Button 变体，120ms；当前项 `aria-current` |
 | **Badge** | — | — | 颜色 120ms（只跟随状态色，不承载主操作） |
 | **列表：骨架 → 内容** | 整体淡入 180ms（`enter-fade`） | — | — |
+| **状态徽标（使用中）与「当前使用」卡三态** | 状态出现 / 三态翻转时入场淡入 180ms（`enter-fade`，key 重挂触发，决策 64） | **退场保持瞬变**（见「不做」表） | — |
+| **表格行 FLIP 让位**（我的主题 删除 / 筛选 / 排序） | — | — | 行数或行序变化时，保留行从旧位置滑到新位置 180ms（`useFlipRows` 的 WAAPI transform，决策 65）；量位置用 `offsetTop`（transform 不参与布局，动画中间态不污染测量） |
+| **右键菜单**（主题卡 / 表格行） | 缩放 0.96→1 + 淡入 240ms（浮层口径，`ui/context-menu.tsx`） | 缩回 0.96 + 淡出 160ms（`ease-exit`） | 菜单项 hover 120ms（`data-[highlighted]`）；定位与 Esc / 方向键漫游交给 base-ui |
+| **Ctrl+K 快速切换面板** | 遮罩淡入 180ms + 面板自顶部缩放 0.96→1 淡入 240ms（`QuickSwitcher.tsx`，浮层口径） | 缩回 0.96 + 淡出 160ms（`ease-exit`） | 候选行 hover / 高亮 120ms（`bg-accent`）；↑↓ 高亮、Enter 应用、Esc 关闭 |
 | **视图切换**（图库 / 我的主题 / 最近使用） | 内容区整体淡入 180ms（`enter-fade`），不做位移与缩放 | — | — |
 | **设置分组切换**（通用 / 快捷键 / 数据 / 系统集成 / 关于） | 内容区整体淡入 180ms（`enter-fade`，`key=分组` 触发重挂），与换页同一套口径 | — | — |
 | **检查器换选中项** | 整体淡入 180ms（`enter-fade`，`key=主题 ID` 触发重挂） | — | — |
@@ -84,6 +88,7 @@
 | 页面 / 路由转场 | 换页只做 180ms 淡入，**不做位移与缩放**：骨架三栏不动，滑动进场会让人以为整块界面在重排 |
 | 光标槽位卡 hover | 它不可点。加 hover 反馈等于骗用户去点 |
 | 光标预览图入场 | 每次切主题都播会晃眼；`.ani` 本身逐帧播放已经是动态的 |
+| 状态徽标退场动画 | 徽标是内联状态标记不是浮层：退场要保留 DOM 160ms + pointer-events 处理，复杂度与收益不成比；「消失即消失」不产生浮层那种"挡路"感（决策 64） |
 | 列表逐项 stagger | 15 个槽位依次淡入会把等待感拉长，属于"表演型动效" |
 | 宽高 / 位置动画 | 触发布局重排，必然掉帧。高度变化一律交给 FLIP 的 transform |
 | Toast 滑动手势 | base-ui 已经用 transform 跟随指针，接管反而会打架 |
@@ -190,6 +195,7 @@ CSS 的规则是「变化发生时按**新状态**的 transition 定义走」，
 | 要求 | 做法 |
 |---|---|
 | 尊重系统"减少动态" | `App.css` 全局把 `animation-duration` / `transition-duration` 压到 0.01ms，并清零 `transition-delay`；FLIP 在 JS 侧直接跳过（`matchMedia`）；`.ani` 预览（`AniPlayer`）降级时只画首帧并停止定时器，系统设置切换时实时响应 |
+| 动画不空烧 CPU | `AniPlayer` 停表条件三合一：离屏（IntersectionObserver）/ 窗口不可见（`visibilitychange`）/ **窗口失焦**（`blur`/`focus` 事件，决策 61）——可见但没焦点的后台窗口里没人看动画；停表保留末帧，聚焦续播 |
 | 焦点不能被延迟 | 焦点环走 120ms 档、颜色不透明；不做 `delay` |
 | 无眩晕风险 | 位移 ≤ 8px、无旋转、无视差、无自动循环播放（`animate-pulse` 在降级下只播一轮） |
 | 不阻断操作 | 浮层退场期间 `pointer-events: none`；动画不改变可点区域 |
@@ -219,7 +225,7 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 必须和 dev server 写在同一条命令里 —— 跨命令的 dev server 会被回收。
 
-脚本逐帧采样，而不是单点截图，断言 47 项：
+脚本逐帧采样，而不是单点截图，断言 53 项：
 
 - Toast 入场/退场：是否真的在过渡、时长、中间态、位移、结束是否卸载；
 - Toast 倒计时条：时长是否等于该条超时、是否随时间缩短、悬停是否真冻结、移开是否继续；
@@ -227,9 +233,10 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 - Toast 让位：是否触发 FLIP、时长 180ms；
 - `prefers-reduced-motion`：时长是否被压到近似 0、是否跳过 FLIP、倒计时条是否不显示；
 - 控件：按钮 120ms、主题卡 180ms 且走 `box-shadow`；
-- 按压弹性（决策 59）：按钮过渡含 320ms spring 段、真实鼠标按下缩到 0.97；
+- 按压弹性（决策 59）：按钮过渡含 320ms spring 段、真实鼠标按下缩到 0.97；开关滑块 320ms spring、切换越过终点（过冲 22px）后回位；对勾播 `check-pop`、过冲（scale > 1.05）后回位到 1；
 - 按压水滴（决策 60）：真实鼠标按下荡开涟漪（`[data-ripple]` 出现、500ms 后移除）、松开水珠晃动（过冲 > 1.01、越过原尺寸后下穿再回 1）、减少动态下不产生涟漪；
-- 开关滑块 320ms spring、切换越过终点（过冲 22px）后回位；对勾播 `check-pop`、过冲（scale > 1.05）后回位到 1；
+- 状态徽标（决策 64）：应用后「使用中」徽标带 `enter-fade` 180ms 入场；侧栏「当前使用」卡三态翻转重播入场；
+- 表格行 FLIP（决策 65）：删除后保留行有 WAAPI 补间（180ms、标准曲线）并真的滑动补位；
 - 运行期无 JS 异常。
 
 改完动效，这条 + `design_check.mjs` 都绿才算完成。
@@ -240,7 +247,11 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-03 | 表格行 FLIP 让位：删除 / 筛选 / 排序后保留行滑动补位 180ms（`useFlipRows`，决策 65）；真机 `verify_flip_shift.mjs` 5/5 |
+| 2026-11-03 | 状态徽标（使用中 ×3 处）与「当前使用」卡三态：入场淡入 180ms、退场保持瞬变（决策 64） |
 | 2026-11-03 | 按压水滴（决策 60）：用户要「水滴感」，涟漪从「不做」翻案——按下荡开涟漪 + 松开水珠衰减晃动（`press-water.ts` 全局委托，凡 `motion-press` 按钮都覆盖）；JS 例外区从一条改两条；开关滑块/对勾维持单次回弹；`motion_check` 43→47 项 |
+| 2026-11-03 | 合并决策 57–60 与 61–68：`motion_check` 43→53 项（水滴 4 项 + 徽标入场与表格行 FLIP 6 项） |
+| 2026-11-03 | `AniPlayer` 停表条件扩到失焦（决策 61）：`blur`/`focus` 事件驱动，事件判初值不用 `hasFocus()`（自动化环境恒 false）；真机 `verify_ani_blur.mjs` 8/8 |
 | 2026-11-03 | 按压弹性（决策 59）：新增第五档 `--motion-spring`(320ms) 与 `--ease-spring` 曲线；Button 按下 scale 0.97 + 松开回弹（App.css `motion-press` 两段曲线，§4.4）、Toggle 滑块 spring 位移、Checkbox 对勾 `check-pop` 入场；涟漪与内容卡片按压列入「不做」；硬规则 ease 家族 +1；`motion_check` 33→43 项 |
 | 2026-11-02 | 开屏遮罩（决策 58）：logo 入场 `splash-in` 与整层退场全走既有四档 token，无新档位、无例外；「停留时长是启动编排不是动效」的口径记入 §3 |
 | 2026-10-25 | `AniPlayer` 接入 `prefers-reduced-motion`：降级只画首帧、监听系统设置变化；恢复后继续播放（决策 20） |

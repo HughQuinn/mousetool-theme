@@ -2,6 +2,7 @@ import { MousePointer2 } from "lucide-react";
 
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { ThemeCardMenu } from "@/components/theme/ThemeContextMenu";
 import { coverSlot, slotStats } from "@/lib/slots";
 import { cn } from "@/lib/utils";
 import type { CursorTheme } from "@/types/theme";
@@ -25,19 +26,20 @@ export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardPr
   const stats = slotStats(theme);
 
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(theme.id)}
-      aria-pressed={selected}
-      aria-current={active ? "true" : undefined}
-      data-theme-card={theme.id}
-      className={cn(
-        "focus-ring group flex w-full flex-col overflow-hidden rounded-xl bg-card text-left",
-        "ring-1 transition-[background-color,box-shadow,translate] duration-(--motion-base) ease-standard active:translate-y-px",
-        // ring 是 box-shadow，1px→2px 能被平滑插值；换成 border 会真的跳一下
-        selected ? "bg-accent ring-2 ring-primary" : "ring-foreground/10 hover:ring-primary/40",
-      )}
-    >
+    <ThemeCardMenu theme={theme} className="w-full">
+      <button
+        type="button"
+        onClick={() => onSelect(theme.id)}
+        aria-pressed={selected}
+        aria-current={active ? "true" : undefined}
+        data-theme-card={theme.id}
+        className={cn(
+          "focus-ring group flex w-full flex-col overflow-hidden rounded-xl bg-card text-left",
+          "ring-1 transition-[background-color,box-shadow,translate] duration-(--motion-base) ease-standard active:translate-y-px",
+          // ring 是 box-shadow，1px→2px 能被平滑插值；换成 border 会真的跳一下
+          selected ? "bg-accent ring-2 ring-primary" : "ring-foreground/10 hover:ring-primary/40",
+        )}
+      >
       <div className="preview-surface relative flex h-28 w-full items-center justify-center border-b border-border/60">
         {cover ? (
           <CursorPreviewImage slot={cover} size="lg" />
@@ -45,7 +47,8 @@ export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardPr
           <MousePointer2 className="size-5 text-muted-foreground" />
         )}
         {active && (
-          <span className="absolute top-2 right-2">
+          // 入场淡入（决策 64）：应用成功的瞬间徽标从无到有，瞬变会闪一下眼
+          <span className="enter-fade absolute top-2 right-2">
             <StatusBadge tone="success" dot>
               使用中
             </StatusBadge>
@@ -60,6 +63,7 @@ export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardPr
           {stats.animated > 0 ? ` · ${stats.animated} 个动态` : ""}
         </span>
       </div>
-    </button>
+      </button>
+    </ThemeCardMenu>
   );
 }

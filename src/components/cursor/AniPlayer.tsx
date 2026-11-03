@@ -14,6 +14,8 @@ interface AniPlayerProps {
  *
  * 只在**看得见**的时候跑：一个 15 槽位主题在检查器里会同时挂十几块画布，
  * 每块都是一条 setTimeout 链；滚出视野之后还照跑，纯属白烧 CPU。
+ * 窗口失焦（用户切去别的应用）同理：动画在后台窗口里没人看，
+ * `visibilitychange` 只管最小化，管不到「可见但没焦点」。
  * 停表时保留最后一帧，所以视觉上没有任何变化。
  *
  * 系统开启「减少动态效果」时只画第一帧：帧间切换本身就是动画，
@@ -31,7 +33,9 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
     let images: HTMLImageElement[] = [];
     /** 画布是否在视口内 */
     let intersecting = true;
-    /** 当前是否停表（离屏或窗口不可见） */
+    /** 宿主窗口是否有焦点；blur / focus 事件驱动（初值恒真，见下方监听处的说明） */
+    let windowFocused = true;
+    /** 当前是否停表（离屏 / 窗口不可见 / 失焦） */
     let blocked = false;
 
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -73,9 +77,9 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
       }
     };
 
-    /** 两个停表条件（离屏 / 窗口最小化）合成一个状态，任一条成立就停 */
+    /** 三个停表条件（离屏 / 窗口不可见 / 失焦）合成一个状态，任一条成立就停 */
     const sync = () => {
-      const next = document.hidden || !intersecting;
+      const next = document.hidden || !intersecting || !windowFocused;
       if (next === blocked) return;
       blocked = next;
       if (blocked) stop();
@@ -106,6 +110,16 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
     const onVisibilityChange = () => sync();
     document.addEventListener("visibilitychange", onVisibilityChange);
 
+    // 失焦判定走事件而不是 document.hasFocus()：后者在无头 / 自动化环境里
+    // 恒为 false，初值一错所有验收脚本里的动画就集体停摆。事件只在真的
+    // 发生焦点迁移时到达，初值放「有焦点」对真实窗口也成立（亮窗即聚焦）。
+    const onWindowFocusChange = (event: Event) => {
+      windowFocused = event.type === "focus";
+      sync();
+    };
+    window.addEventListener("blur", onWindowFocusChange);
+    window.addEventListener("focus", onWindowFocusChange);
+
     const onMotionChange = () => {
       reduced = motionQuery.matches;
       if (reduced) stop();
@@ -118,6 +132,8 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
       stop();
       observer?.disconnect();
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onWindowFocusChange);
+      window.removeEventListener("focus", onWindowFocusChange);
       motionQuery.removeEventListener("change", onMotionChange);
       images = [];
     };
