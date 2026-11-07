@@ -8,10 +8,23 @@ export const CDP_PORT = 9335;
 export const ROOT = join(process.env.TEMP ?? ".", "cs-rm-verify");
 
 export function prepareRoot() {
-  rmSync(ROOT, { recursive: true, force: true });
+  rmWithRetry(ROOT);
   mkdirSync(join(ROOT, "appdata"), { recursive: true });
   mkdirSync(join(ROOT, "pack"), { recursive: true });
   return { appdata: join(ROOT, "appdata"), pack: join(ROOT, "pack") };
+}
+
+/** Windows 上刚用过的临时目录常被杀软 / 索引器短暂占着（EPERM），重试几轮再放弃 */
+function rmWithRetry(path, attempts = 6) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+      return true;
+    } catch {
+      if (i < attempts - 1) sleep(500);
+    }
+  }
+  return false;
 }
 
 export function assertNoRunningInstance() {
@@ -31,6 +44,10 @@ export function launchApp(appdata) {
     env: {
       ...process.env,
       LOCALAPPDATA: appdata,
+      // WebView2 的用户数据目录不认 LOCALAPPDATA 覆盖（按 bundle 标识符落在
+      // 用户真实 %LOCALAPPDATA%），必须用自家环境变量显式指进隔离根，
+      // 否则外观偏好等 localStorage 会写进并残留到用户真实 profile
+      WEBVIEW2_USER_DATA_FOLDER: join(appdata, "webview-profile"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -60,12 +77,16 @@ export function connectCdp(page) {
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   const pending = new Map();
   const pageErrors = [];
+  const eventListeners = new Set();
   ws.addEventListener("message", (ev) => {
     const data = JSON.parse(ev.data);
     if (data.method === "Runtime.exceptionThrown") {
       pageErrors.push(
         data.params?.exceptionDetails?.exception?.description ?? data.params?.exceptionDetails?.text,
       );
+    }
+    if (data.method && eventListeners.size) {
+      for (const fn of eventListeners) fn(data.method, data.params);
     }
     if (data.id && pending.has(data.id)) {
       pending.get(data.id)(data);
@@ -95,7 +116,12 @@ export function connectCdp(page) {
     }
     return res.result?.result?.value;
   };
-  return { opened, send, evaluate, pageErrors };
+  /** 订阅 CDP 事件（如 Page.screencastFrame）；返回退订函数 */
+  const onEvent = (fn) => {
+    eventListeners.add(fn);
+    return () => eventListeners.delete(fn);
+  };
+  return { opened, send, evaluate, onEvent, pageErrors };
 }
 
 export async function waitAppReady(evaluate) {
@@ -123,7 +149,10 @@ export function killApp() {
 }
 
 export function cleanup() {
-  rmSync(ROOT, { recursive: true, force: true });
+  // 清理失败只告警不抛错：它在 finally 里，抛错会吞掉验证脚本本来的退出码
+  if (!rmWithRetry(ROOT)) {
+    console.log(`[warn] 临时目录未能清理（可能被占用，可手动删）：${ROOT}`);
+  }
 }
 
 export function sleep(ms) {

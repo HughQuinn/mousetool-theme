@@ -210,7 +210,7 @@
 | 错误文案 | 中文主句说人话 + 括号里放技术细节；能指导下一步就写上去 |
 | 可滚动容器 | 一律加 `scroll-thin`：6px 宽、轨道透明、拇指 hover 才显形，`scrollbar-gutter: stable` 保证滚动条出现时内容不横向跳。**别用 `scrollbar-width: thin`**——它在 Chromium 里仍走经典样式（上下带箭头、常显） |
 | 面板分隔条 | 6px 宽、`cursor-col-resize`、`role="separator"` + `aria-valuenow`；拖动改宽度、双击复位、`←/→` 每次 16px、`Home/End` 到边界。宽度只在会话内有效，不落盘 |
-| 深色模式 | 三态：跟随系统（默认）/ 浅色 / 深色，状态在 `lib/theme-mode.ts` 一处，落盘 `cursorstudio.theme-mode`；切浅/深时同步调 Tauri `setTheme` 让标题栏一致。**组件里不写 `dark:` 前缀**，颜色全部走 token |
+| 深色模式 | 三态：跟随系统（默认）/ 浅色 / 深色，状态在 `lib/theme-mode.ts` 一处，落盘 `cursorstudio.theme-mode`；切浅/深时同步调 Tauri `setTheme` 让标题栏一致。**组件里不写 `dark:` 前缀**，颜色全部走 token。手动切换时**滑块先走、配色后翻**：整页配色等分段滑块到位（~330ms）一次翻转（决策 70），选中态与记忆仍立即生效 |
 | 外观切换控件 | 「设置 → 通用」，一行「外观」+ 三个图标按钮（Monitor / Sun / Moon），`role="group"` + `aria-pressed`；28px 命中区，当前项用 `sidebar-accent` + `shadow-raised` + 描边 |
 | 状态徽标 | `ui/status-badge`，四档语义：success（使用中 / 健康）/ neutral（系统方案、进行中）/ muted（已删除 / 排队）/ warning（损坏 / 失败）。**永远没有 primary 底色**——主色只留给每屏唯一的主动作；「使用中」一律 success 徽标（卡片角标、表格行、检查器标题区内联），不再用整条大面板 |
 | 当前光标卡 | 侧栏常驻卡：使用中 / 系统默认 / 被系统设置修改三态；外部改写态在 full 形态增加「保存并应用」（outline xs，全宽），busy 记 `save:current`，成功后立即切回「当前使用中」并隐藏入口，不新开弹窗 |
@@ -262,3 +262,4 @@ node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、�
 | 2026-10-26 | v2.1 UI 一致性重构 + 三个维护界面。基础组件：`StatusBadge`（四档语义、禁 primary）/ `SectionLabel`（12px 分段标题）/ `SearchField`（Ctrl+F 锚点 + 清除按钮）/ `SlotMeter`（15 段离散刻度替代连续覆盖条）/ `ContentFrame`（full/896/768/640 四档内容宽度）/ `Dialog`（可关闭任务层弹窗）。视觉口径：「使用中」统一 success 徽标（检查器改标题区内联，删除 success 大面板）；主题卡保持 ring-only；图库封面 112px、检查器预览 80px；外观控件更名「界面外观」。新界面：诊断中心（只读弹窗）、备份历史（数据子页）、导入中心（批量任务层）——均不新增导航 |
 | 2026-10-28 | v2.4 光标守护：设置通用页新增行为卡（开关 + 状态行 + 立即恢复）；自动恢复只用 info toast 说明触发原因，不叠加常规「已应用」成功提示；默认关闭，不新增导航 |
 | 2026-10-30 | v2.5 批量整理（决策 43）：新增 `ui/checkbox`（20px，`role="checkbox"` 支持 checked / mixed / unchecked 三态，键盘 Space / Enter 沿用原生 button）；「我的主题」整理模式出现逐行勾选与表头三态全选，默认表格形态不变；使用中主题的复选框禁用并在 aria-label / title 说明原因；批量删除确认走 AlertDialog 并逐条列名 |
+| 2026-11-07 | v2.6 主题切换时序编排（决策 70）：手动切浅 / 深改为「滑块先走、配色后翻」——选中态与记忆立即生效，整页配色 + 标题栏等分段滑块 320ms 行程走完一次翻转，消除"闪变淹没滑块轨迹 + 同帧卡顿"；深色下分段滑块描边 / 阴影加强一档（App.css `.segmented-thumb`） |

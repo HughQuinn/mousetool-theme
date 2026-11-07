@@ -596,6 +596,132 @@ try {
     check("开关滑块越过终点后回位（回弹）", overshot && Math.abs(toggle.end - toggle.target) < 1, `overshoot=${overshoot.toFixed(1)} end=${toggle.end.toFixed(1)}`);
   }
 
+  // 分段控件滑块（决策 69）：设置页「界面外观」—— translate+width 同走 320ms spring、
+  // 中间态、过冲回位、宽度拉伸、落位与选中项对齐；结束把原选项点回去，profile 外观态不漂移
+  const segmented = JSON.parse(
+    await evaluate(`(async () => {
+      const group = document.querySelector('[aria-label="界面外观"]');
+      if (!group) return JSON.stringify({ error: 'no-group' });
+      const thumb = group.querySelector(':scope > span[aria-hidden]');
+      const radios = [...group.querySelectorAll(':scope > [role="radio"]')];
+      const checked = radios.find((b) => b.getAttribute('aria-checked') === 'true') ?? radios[0];
+      if (!thumb || !checked) return JSON.stringify({ error: 'no-thumb' });
+      const readX = () => {
+        const t = getComputedStyle(thumb).translate;
+        return t === 'none' ? 0 : parseFloat(t);
+      };
+      const readW = () => parseFloat(getComputedStyle(thumb).width);
+      const start = { x: readX(), w: readW() };
+      // 挑宽度差最大的目标：宽度拉伸（水滴形态）才采得到
+      let target = null;
+      for (const b of radios) {
+        if (b !== checked && (!target || Math.abs(b.offsetWidth - start.w) > Math.abs(target.offsetWidth - start.w))) target = b;
+      }
+      const targetX = target.offsetLeft;
+      const targetW = target.offsetWidth;
+      const cs = getComputedStyle(thumb);
+      const pre = { property: cs.transitionProperty, duration: cs.transitionDuration, easing: cs.transitionTimingFunction };
+      const frames = [];
+      const t0 = performance.now();
+      target.click();
+      while (performance.now() - t0 < 420) {
+        await new Promise((r) => requestAnimationFrame(r));
+        frames.push({ x: readX(), w: readW() });
+      }
+      const end = { x: readX(), w: readW() };
+      checked.click();
+      await new Promise((r) => setTimeout(r, 420));
+      return JSON.stringify({ pre, start, targetX, targetW, frames, end });
+    })()`),
+  );
+  if (segmented.error) {
+    check("设置页有界面外观分段控件（用于验证）", false, segmented.error);
+  } else {
+    check(
+      "分段滑块 translate+width 同走 320ms spring（决策 69）",
+      segmented.pre.property.includes("translate") &&
+        segmented.pre.property.includes("width") &&
+        segmented.pre.duration === "0.32s" &&
+        segmented.pre.easing.includes("cubic-bezier(0.34, 1.56, 0.64, 1)"),
+      `${segmented.pre.property} / ${segmented.pre.duration} ${segmented.pre.easing}`,
+    );
+    const xLo = Math.min(segmented.start.x, segmented.targetX);
+    const xHi = Math.max(segmented.start.x, segmented.targetX);
+    check(
+      "分段滑块切换有中间态（流过去不是跳变）",
+      segmented.frames.some((f) => f.x > xLo + 0.5 && f.x < xHi - 0.5),
+      `x ${segmented.start.x.toFixed(0)} → ${segmented.end.x.toFixed(0)}，中间帧 ${segmented.frames.length}`,
+    );
+    const xs = segmented.frames.map((f) => f.x);
+    const peak = segmented.targetX > segmented.start.x ? Math.max(...xs) : Math.min(...xs);
+    const overshot = segmented.targetX > segmented.start.x ? peak > segmented.targetX + 1 : peak < segmented.targetX - 1;
+    check(
+      "分段滑块越过终点后回位（水滴回弹）",
+      overshot && Math.abs(segmented.end.x - segmented.targetX) < 1,
+      `peak=${peak.toFixed(1)} target=${segmented.targetX} end=${segmented.end.x.toFixed(1)}`,
+    );
+    const wLo = Math.min(segmented.start.w, segmented.targetW);
+    const wHi = Math.max(segmented.start.w, segmented.targetW);
+    check(
+      "分段滑块移动中被拉伸（宽度随行程形变）",
+      segmented.frames.some((f) => f.w > wHi + 0.5 || f.w < wLo - 0.5),
+      `w ${segmented.start.w.toFixed(0)} → ${segmented.targetW}`,
+    );
+  check(
+    "分段滑块落位与选中项对齐（状态同步）",
+    Math.abs(segmented.end.x - segmented.targetX) < 1 && Math.abs(segmented.end.w - segmented.targetW) < 1,
+    `end x=${segmented.end.x.toFixed(1)} w=${segmented.end.w.toFixed(1)} / 选项 x=${segmented.targetX} w=${segmented.targetW}`,
+  );
+
+  // ── 主题切换的时序编排（决策 70）：配色翻转晚于滑块 ──
+  // 点深色瞬间 html.dark 不该立刻翻：轨迹要在高对比的旧主题下播完（不被
+  // 整页闪变淹没），整页重排也不能和滑块动画抢同一帧。先归一到浅色再点深色
+  const choreo = JSON.parse(
+    await evaluate(`(async () => {
+      const group = document.querySelector('[aria-label="界面外观"]');
+      if (!group) return JSON.stringify({ error: 'no-group' });
+      const radios = [...group.querySelectorAll(':scope > [role="radio"]')];
+      const checked = radios.find((b) => b.getAttribute('aria-checked') === 'true') ?? radios[0];
+      const light = radios.find((b) => b.textContent.includes('浅色'));
+      const dark = radios.find((b) => b.textContent.includes('深色'));
+      const thumb = group.querySelector(':scope > span[aria-hidden]');
+      light.click();
+      await new Promise((r) => setTimeout(r, 600));
+      const frames = [];
+      const t0 = performance.now();
+      dark.click();
+      while (performance.now() - t0 < 600) {
+        await new Promise((r) => requestAnimationFrame(r));
+        frames.push({
+          t: Math.round(performance.now() - t0),
+          dark: document.documentElement.classList.contains('dark'),
+          x: (() => { const tr = getComputedStyle(thumb).translate; return tr === 'none' ? 0 : parseFloat(tr); })(),
+        });
+      }
+      const firstDark = frames.find((f) => f.dark)?.t ?? -1;
+      const firstMove = frames.find((f) => f.x > 93)?.t ?? -1; // 浅色位 x=92
+      checked.click();
+      await new Promise((r) => setTimeout(r, 600));
+      return JSON.stringify({ startDark: frames[0].dark, firstDark, firstMove, endDark: frames[frames.length - 1].dark });
+    })()`),
+  );
+  if (choreo.error) {
+    check("界面外观分段控件在设置页（用于验证）", false, choreo.error);
+  } else {
+    check(
+      "配色翻转晚于滑块起步（点击瞬间不闪变，决策 70）",
+      choreo.startDark === false && choreo.firstMove > 0 && choreo.firstMove < 150,
+      `起步 ${choreo.firstMove}ms / 翻转 ${choreo.firstDark}ms`,
+    );
+    check(
+      "配色在滑块到位后一次翻转",
+      choreo.firstDark >= 300 && choreo.firstDark < 600 && choreo.endDark === true,
+      `firstDark=${choreo.firstDark}ms`,
+    );
+  }
+
+  }
+
   // 复选框对勾：我的主题页 —— check-pop 入场、过冲、回位
   // 导航按钮带数量徽章，textContent 是「我的主题N」，只能 includes 匹配；
   // 行级复选框要先点「批量整理」进选择模式才渲染；

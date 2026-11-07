@@ -473,7 +473,8 @@ try {
     await evaluate(
       `[...document.querySelectorAll('[aria-label="界面外观"] [role="radio"]')].find((b) => b.textContent.includes("${label}"))?.click()`,
     );
-    await sleep(350);
+    // 配色翻转等滑块 320ms 行程走完（决策 70），等待要盖过 330ms 延迟
+    await sleep(600);
   };
   const emulate = async (value) => {
     await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
@@ -504,7 +505,7 @@ try {
 
   await clickMode("深色");
   const forcedDark = await readTheme();
-  assert("手动选深色：立即生效并记住", forcedDark.hasClass === true && forcedDark.stored === "dark", forcedDark.stored);
+  assert("手动选深色：到位生效并记住（配色随滑块到齐翻转，决策 70）", forcedDark.hasClass === true && forcedDark.stored === "dark", forcedDark.stored);
   await emulate("light");
   const stillDark = await readTheme();
   assert("手动深色不被系统浅色顶掉", stillDark.hasClass === true, `dark=${stillDark.hasClass}`);
