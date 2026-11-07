@@ -6,11 +6,14 @@ import { inTauri } from "@/services/theme";
 /**
  * 外观：默认跟随系统，允许手动覆盖成浅色 / 深色
  *
- * 三条规矩：
+ * 四条规矩：
  * 1. `system` 时不写死任何偏好，系统一变就跟着变；
  * 2. 选了浅/深就是**手动覆盖**，此后不再跟随系统，直到用户选回 `system`；
  * 3. 只有一处状态（这个模块），Sidebar 通过 `useThemeMode` 读，
- *    避免"组件各自记一份、切完互相同步"的老问题。
+ *    避免"组件各自记一份、切完互相同步"的老问题；
+ * 4. 手动切换时**滑块先走、配色后翻**（决策 70）：选中态与记忆立即生效，
+ *    整页 `html.dark` 与标题栏等滑块 320ms 行程走完再一次翻转——
+ *    轨迹不被整页闪变淹没，配色重排也不与滑块动画抢同一帧。
  */
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -65,6 +68,15 @@ function notify(): void {
   for (const listener of listeners) listener();
 }
 
+/** 配色翻转比滑块动画晚一拍：320ms 行程 + 一帧余量（决策 70） */
+const PAINT_DELAY_MS = 330;
+let pendingPaint: ReturnType<typeof setTimeout> | null = null;
+
+function applyPaint(mode: ThemeMode): void {
+  paint(mode);
+  void syncWindowTheme(mode);
+}
+
 export function getThemeMode(): ThemeMode {
   return current;
 }
@@ -83,9 +95,22 @@ export function setThemeMode(mode: ThemeMode): void {
   } catch {
     /* 存不了就只在本次会话生效 */
   }
-  paint(mode);
-  void syncWindowTheme(mode);
   notify();
+  // 减少动态下滑块没有可看的行程，配色直翻不拖延
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (pendingPaint) {
+      clearTimeout(pendingPaint);
+      pendingPaint = null;
+    }
+    applyPaint(mode);
+    return;
+  }
+  // 连点合并：定时器只认最新选择，不在中途闪回旧主题
+  if (pendingPaint) clearTimeout(pendingPaint);
+  pendingPaint = setTimeout(() => {
+    pendingPaint = null;
+    applyPaint(current);
+  }, PAINT_DELAY_MS);
 }
 
 /** 在首帧之前调用：先落 class，避免深色系统上先白闪一下 */

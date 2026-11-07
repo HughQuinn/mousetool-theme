@@ -77,6 +77,8 @@
 | 66 | 主题卡 / 表格行右键菜单 | 图库卡与「我的主题」行右键出菜单：应用 / 导出 ZIP / 重命名（仅用户主题）/ 删除（仅用户主题，使用中禁用并说明；系统方案只有应用与导出）。**重命名与删除不直接执行**——先选中该主题再发 `mousetool:request-*` 事件，由检查器里已有的编辑框与确认框接手（确认与后果说明只有一份）；组件是 base-ui ContextMenu 自封装（`ui/context-menu.tsx`，浮层动效口径）；不做键盘入口（检查器已有完整键盘路径，右键菜单是鼠标快捷方式） |
 | 67 | 图库网格方向键导航 | 图库页 ←→ 移一张、↑↓ 移一行、Home/End 首尾，跨「系统方案 / 我的主题」两段连续漫游；**Tab 语义不动**（仍逐卡穿越，不做 roving tabindex）——方向键是二维移动的增强，不是替换；列数按第一行卡片实测（auto-fill 布局随窗宽变），不写死。断言进 `keyboard_nav_check.mjs`（14 项），真机冒烟用 CDP Input 域发真实按键验证 |
 | 68 | Ctrl+K 快速切换面板 | 应用内浮层：输入即过滤全部主题（我的主题在前名称序、系统方案在后、使用中置顶），↑↓ 高亮、Enter 直接应用、Esc 关；底部常驻「还原系统默认光标」动作行。快捷键注册进 `SHORTCUTS`（受 `shortcuts_enabled` 开关管辖）；候选过滤是纯函数 `lib/quick-switch.ts`（可单测）；面板是任务层浮层不进 PAGE_META/VIEWS；**应用失败只 toast、不在面板里确认**——面板只负责选 |
+| 69 | 分段控件选中滑块 | Segmented 切换时选中底以滑块「流」到新选项：整组共享一个绝对定位滑块，translate + width 同走 `--motion-spring` 320ms ease-spring（决策 59 同款弹性）；几何取选中按钮 `offset*`、`ResizeObserver` 跟随尺寸变化；按钮文字颜色仍走 fast 不弹；「宽高动画」禁令的绝对定位覆盖层特例；`motion_check` 53→58 项 |
+| 70 | 主题切换的时序编排与深色滑块对比 | 真机反馈「切深色看不见滑块轨迹、还卡一下」：实测点击后 11ms 整页 `html.dark` 就翻转、27ms 滑块才起步——轨迹全程泡在深色低对比配色里，整页重排还与滑块抢同一帧。改为**滑块先走、配色后翻**：选中态与 localStorage 立即生效，`html.dark` + 标题栏延迟 330ms（行程走完）一次翻转；连点合并只翻最新选择、`prefers-reduced-motion` 直翻、系统自动变化（matchMedia）保持立即；深色下滑块描边 / 阴影加强一档（App.css `.segmented-thumb`，组件不写 `dark:`）；`design_check` 口径「立即生效」→「到位生效」、`motion_check` 58→60 项 |
 
 ---
 
@@ -1347,6 +1349,28 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **按键分发**：`event.code` 优先、缺失时按 `event.key` 回退（纯函数 `lib/shortcut-code.ts`，`npm test` 覆盖）。注入式键盘（PowerShell SendKeys、屏幕键盘、部分辅助工具）只带 `key`、`code` 为空，只认 `code` 会让全部应用内快捷键在这类输入下集体失灵——2026-11-03 真机验证发现并修复。
 - **不做确认**：Enter 应用无二次确认——应用主题本身可逆（还原默认 / 换别的），与检查器「应用此主题」按钮同权限；失败由 toast 报，面板不背错误处理。
 - **验收边界**：`palette_check.mjs`（12/12，独立 profile——脚本末段关闭快捷键开关会持久化，共用固定 profile 会让下一轮从「已禁用」起步）；真机 `verify_ui_smoke.mjs` 用真实 Ctrl 按键拉起面板并 Esc 关闭，**不按 Enter**（会写真实注册表）。
+
+---
+
+## 决策 69：分段控件选中滑块
+
+**结论**（2026-11-07）：用户要「按钮切换时像水滴一样流过去」——`Segmented` 的选中底色从「逐按钮各自带 `bg-card`」改为整组共享一个绝对定位滑块：切换时 translate + width 同走 `--motion-spring`（320ms ease-spring），滑块从旧选项滑到新选项、移动中被拉伸、到位时收回，与 Toggle 滑块（决策 59）同一套弹性语言。
+
+- **几何来源**：滑块位置 = 选中按钮的 `offsetLeft/offsetTop/offsetWidth/offsetHeight`（分组容器加 `relative` 即 offsetParent，天然含内边距）；`useLayoutEffect` 里量取——首帧绘制前就位，滑块挂载即带正确位置、不会从 0 滑入；`ResizeObserver` 跟随字体就位与容器尺寸变化重量。滑块 `aria-hidden` + `pointer-events-none`，键盘模型（radiogroup + roving tabindex，决策 20）与点击路径不动。
+- **为什么不走 transform-only**：选项宽度不等（「跟随系统」vs「浅色」），纯 translate 对不齐两条边，scaleX 又会把圆角拉变形。「不做宽高动画」禁令针对的是内容流被牵动重排；绝对定位覆盖层的宽度变化重排范围只有它自己，已在 motion.md 记为唯一特例。
+- **颜色不弹**：决策 59 的「Segmented 选中项弹性不做」否的是**颜色**过冲（320ms 变色显得反应慢），本决策修订的是位移——按钮文字颜色仍走 fast 档，只有滑块的 translate + width 吃 spring。
+- **断言**：`motion_check` 53→58 项（滑块 320ms spring / 切换中间态 / 过冲回位 / 移动中宽度形变 / 落位与选中项对齐）。设置页两处（界面外观、关闭行为）与所有未来使用方自动生效，组件是唯一改动点。
+
+---
+
+## 决策 70：主题切换的时序编排与深色滑块对比
+
+**结论**（2026-11-07）：决策 69 真机验证后用户反馈「切换到深色就看不到滑块移动轨迹，而且卡顿一下」。逐帧诊断实锤：点击后 **11ms** 整页 `html.dark` 就翻转、滑块 **27ms** 才起步——轨迹全程泡在深色低对比配色里（深色 card 0.205 落在 muted 0.269 上，反差天生比浅色的白 on 浅灰弱），整页重排重绘又与滑块动画抢同一帧（无头环境测不到，真窗口才掉帧）。
+
+- **滑块先走、配色后翻**：`setThemeMode` 里选中态与 localStorage **立即**生效（滑块立刻起步、状态同步不受影响），`html.dark` 翻转与标题栏 `setTheme` 延迟 330ms（320ms 行程 + 一帧余量）一次完成——轨迹在高对比的旧主题下播完，"先给操作反馈、再翻环境"；配色重排落在动画之后，不再抢帧。
+- **连点合并**：延迟定时器只认最新选择，快速连点不在中途闪回旧主题；`prefers-reduced-motion` 下没有可看的行程，配色直翻不拖延；系统深浅色自动变化走 matchMedia 监听（无滑块参与）保持立即翻转。
+- **深色滑块对比**：滑块「抬起」视觉移到 App.css 的 `.segmented-thumb`（组件不写 `dark:` 前缀的既定口径），深色描边白 10%→16%、阴影加深一档，深色下的静止态与轨迹可读；浅色维持既有 token 原样。
+- **行为契约变更**：「手动选深色立即生效」改为「到位生效」（点完到整页变色有 ~0.3s 编排延迟）；`design_check` 断言名与等待时长同步调整（clickMode 350→600ms），`motion_check` 58→60 项（翻转晚于滑块起步 / 配色滑块到位后一次翻转），真机 `verify_segmented_slide.mjs` 加同款两条断言并改用 screencast 逐帧取证（慢动作会拉长 CSS 行程而 JS 延迟不变，时序失真，弃用）。
 
 ---
 

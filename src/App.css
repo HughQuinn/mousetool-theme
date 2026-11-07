@@ -305,6 +305,23 @@
   animation: check-pop var(--motion-spring) var(--ease-spring) both;
 }
 
+/* 分段滑块（决策 69）的「抬起」视觉：浅色沿用 shadow-raised + border 描边。
+   深色下 card(0.205) 落在 muted(0.269) 上反差天生比浅色（白 on 浅灰）弱，
+   描边与阴影各加强一档，滑块静止态与滑动轨迹才可读（决策 70）——
+   组件里不写 dark: 前缀（颜色全走 token），深色差异集中在这里 */
+.segmented-thumb {
+  background-color: var(--card);
+  box-shadow:
+    var(--elev-raised),
+    0 0 0 1px var(--border);
+}
+
+html.dark .segmented-thumb {
+  box-shadow:
+    0 1px 3px oklch(0 0 0 / 0.5),
+    0 0 0 1px oklch(1 0 0 / 0.16);
+}
+
 /* Toast 倒计时条：贴卡片底边的 scaleX 由 1 缩到 0，条长就是"剩余寿命"。
    两处刻意偏离"只写 --motion-* / ease-standard"硬规则，因为它是**读数**不是装饰：
    1. 时长是数据（等于该条 toast 的 timeout，3.2–6s），由组件用 animation-duration 内联注入 —— 同 FLIP 的 JS 侧补间；

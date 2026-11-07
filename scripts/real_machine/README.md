@@ -9,7 +9,9 @@
    `tasklist | findstr mousetool-theme` 应为空。
 2. **vite 已在 1420**：`npm run dev:bg start`（与应用同源加载前端）。
 3. Rust 工具链可用（脚本会 `cargo run` 编译并启动应用，用**隔离的
-   LOCALAPPDATA 数据根**，不碰用户真实主题 / 备份）。
+   LOCALAPPDATA 数据根**，不碰用户真实主题 / 备份）。WebView2 的用户数据
+   目录同样指进隔离根（`WEBVIEW2_USER_DATA_FOLDER`）——它不认 LOCALAPPDATA
+   覆盖，不显式指定就会把外观偏好等 localStorage 写进用户真实 profile。
 
 ## 脚本做什么
 
@@ -30,6 +32,7 @@
 | `verify_close_ask.mjs` | 决策 57：真实 WM_CLOSE（user32 直投主窗口句柄）下的关窗拦截——ask 弹询问框、取消不动设置、不勾选一次性藏窗且 settings.json 不落盘、勾选后 tray / exit 真实落盘、`exit_app` 进程自行结束、exit 模式跨重启直接退；二次启动唤回隐藏窗。可见性判据必须 EnumWindows 按标题 + `IsWindowVisible`（`.NET` 的 `MainWindowHandle` 会抓到 WebView2 宿主的无标题可见窗口，全程误报） | 无需造输入（WM_CLOSE 由脚本注入） |
 | `verify_splash.mjs` | 决策 58：真实窗口下的开屏生命周期——遮罩出现、最短停留 ≥800ms、淡出有中间态（渐隐不是瞬消）、卸载时数据已就绪、减少动态下就绪即走（<400ms）、遮罩底色与页面底色一致、盖满窗口且不截胡指针事件。判定靠 CDP `addScriptToEvaluateOnNewDocument` 注入 rAF 逐帧探针 + `Page.reload` 确定性重放（冷启动与重放同一条 React 挂载路径） | 无需造输入 |
 | `verify_spring_motion.mjs` | 决策 59：真实 WebView2 下的弹性按压反馈——CDP `Input.dispatchMouseEvent` 真实鼠标按下/释放采样按钮 scale（0.97→过冲回 1）、开关滑块位移过冲回位、对勾 `check-pop` 入场过冲、减少动态压到 0.01ms。复选框用例所需主题经 `import_theme` 文件夹导入造出（只落盘不应用）；CDP 直调绕过前端 store，导入后 `Page.reload` 重扫 | 复制 `C:\Windows\Cursors\aero_arrow.cur` |
+| `verify_segmented_slide.mjs` | 决策 69/70：分段控件选中滑块在真实窗口下生效——真实鼠标点击 / 真实方向键触发滑动并逐帧采样（320ms spring、过冲回位、宽度拉伸、落位对齐）、关闭行为经真实 IPC 落盘 settings.json、reload 后滑块首帧即对齐持久化值、减少动态即时到位；**主题切换时序编排**（配色翻转晚于滑块起步/到位，决策 70）+ screencast 真实速度逐帧取证（`%TEMP%\cs-rm-shots\`）。不导入主题、不碰注册表 | 无需造输入 |
 | `verify_cursor_size.mjs` | 决策 51：光标大小注册表路线的真机验证——`CursorBaseSize` / `AccessibilityCursorSize` 写入 + SPI 后实测光标位图不缩放，**假设被证伪**（退出码 1 = 假设未证实，本身是有效结论） | 无需造输入（reg.exe + PowerShell 直测，整键备份 + 逐值还原） |
 
 脚本都会：启动隔离应用 → CDP 直连 `__TAURI_INTERNALS__.invoke` 断言 →
@@ -53,6 +56,7 @@ node scripts/real_machine/verify_flip_shift.mjs
 node scripts/real_machine/verify_close_ask.mjs
 node scripts/real_machine/verify_splash.mjs
 node scripts/real_machine/verify_spring_motion.mjs
+node scripts/real_machine/verify_segmented_slide.mjs
 npm run dev:bg stop
 ```
 
